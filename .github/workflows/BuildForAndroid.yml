@@ -38,9 +38,12 @@ jobs:
     - name: Strip
       run: |
         cd src/main/cpp/build/
+        if [ -f libmobileglues.so ]; then
         strip --strip-all libmobileglues.so
-
-
+        else
+        echo "libmobileglues.so not found!"
+        exit 1
+        fi
 
     - name: Upload
       uses: actions/upload-artifact@main
