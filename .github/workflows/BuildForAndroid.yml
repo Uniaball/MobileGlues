@@ -33,7 +33,9 @@ jobs:
 
     - name: Build
       run: cmake --build src/main/cpp/build --config RelWithDebInfo --target mobileglues
-      
+
+    - name: Install llvm
+      run: sudo apt-get update && sudo apt-get install -y llvm
 
     - name: Strip
       run: |
@@ -44,4 +46,4 @@ jobs:
       uses: actions/upload-artifact@main
       with:
         name: MobileGlues
-        path: build/libmobileglues.so
+        path: src/main/cpp/build/libmobileglues.so
