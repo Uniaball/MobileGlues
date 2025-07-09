@@ -44,7 +44,7 @@ jobs:
 
     - name: Strip
       run: |
-        cd ${{ steps.strings.outputs.build-output-dir }} \
+        cd ${{ steps.strings.outputs.build-output-dir }} 
         strip --strip-all libmobileglues.so
 
 
