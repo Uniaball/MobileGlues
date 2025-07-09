@@ -1,0 +1,51 @@
+name: Build MobileGlues for Android
+
+on:
+  workflow_dispatch:
+  
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: RelWithDebInfo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:      
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@main
+
+    - name: Set reusable strings
+      # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
+
+    - name: Configure CMake
+      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      run: >
+        cd src/main/cpp
+        mkdir -p build
+        git clone --depth 1 https://github.com/g-truc/glm.git src/main/cpp/include/glm
+        git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -DANDROID_ABI = "arm64-v8a"
+        -DANDROID_PLATFORM = "android-29"
+        -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake
+        -DANDROID_TOOLCHAIN=clang   
+
+    - name: Build
+      # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
+      run: cmake --build build --config RelWithDebInfo --target mobileglues
+
+
+
+    - name: Upload
+      uses: actions/upload-artifact@main
+      with:
+        name: MobileGlues
+        path: /Users/runner/work/MobileGlues/MobileGlues/src/main/cpp/build
