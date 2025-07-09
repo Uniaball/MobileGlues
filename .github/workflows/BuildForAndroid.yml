@@ -32,7 +32,7 @@ jobs:
             -DANDROID_TOOLCHAIN=clang
 
     - name: Build
-      run: cmake --build build --config RelWithDebInfo --target mobileglues
+      run: cmake --build src/main/cpp/build --config RelWithDebInfo --target mobileglues
       
 
     - name: Strip
