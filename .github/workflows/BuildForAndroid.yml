@@ -42,6 +42,10 @@ jobs:
       # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
       run: cmake --build build --config RelWithDebInfo --target mobileglues
 
+    - name: Strip
+      run: |
+        llvm-strip --strip-all libmobileglues.so
+
 
 
     - name: Upload
