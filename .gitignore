@@ -1,3 +1,5 @@
 /build
 .cxx/
 .idea/
+src/main/cpp/.vs
+src/main/cpp/out
