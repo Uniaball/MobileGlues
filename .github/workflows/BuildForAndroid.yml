@@ -2,90 +2,45 @@ name: Build MobileGlues for Android
 
 on:
   workflow_dispatch:
-
+  
 env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: RelWithDebInfo
-  ANDROID_ABI: arm64-v8a
-  ANDROID_PLATFORM: android-29
-  NDK_VERSION: 25.1.8937393
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
+
+    strategy:      
       fail-fast: false
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-
-    - name: Install Android NDK
-      run: |
-        sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
-        echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
-
-    - name: Install build dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          llvm \
-          ccache \
-          ninja-build
-
-    - name: Prepare dependencies
-      run: |
-        mkdir -p src/main/cpp/include
-        mkdir -p src/main/cpp/3rdparty
-        
-        rm -rf src/main/cpp/include/glm
-        rm -rf src/main/cpp/3rdparty/xxhash
-        
-        git clone --depth 1 https://github.com/g-truc/glm.git src/main/cpp/include/glm
-        git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash
-
-    - name: Fix header includes
-      run: |
-        sed -i 's/#include <__stddef_size_t.h>/#include <cstddef>/g' src/main/cpp/config/settings.h
-        sed -i 's/#include <__stddef_size_t.h>/#include <cstddef>/g' src/main/cpp/main.cpp
-
-    - name: Configure ccache
-      run: |
-        ccache --set-config=max_size=1G
-        ccache --zero-stats
-        echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache" >> $GITHUB_ENV
+    - uses: actions/checkout@main
 
     - name: Configure CMake
-      working-directory: src/main/cpp
-      run: |
-        mkdir -p build && cd build
-        cmake .. \
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-          -DANDROID_ABI=${{ env.ANDROID_ABI }} \
-          -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
-          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
-          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-          -DCMAKE_MAKE_PROGRAM=ninja \
-          -GNinja
+            cd src/main/cpp
+            mkdir -p build
+            git clone --depth 1 https://github.com/g-truc/glm.git src/main/cpp/include/glm
+            git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash
+            cmake -B build \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_TOOLCHAIN=clang
 
-    - name: Build MobileGlues
-      working-directory: src/main/cpp/build
-      run: |
-        cmake --build . --target mobileglues -j $(nproc)
-        ccache --show-stats
+    - name: Build
+      run: cmake --build src/main/cpp/build --config RelWithDebInfo --target mobileglues
 
-    - name: Strip binary
-      run: |
-        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
-          --strip-all src/main/cpp/build/libmobileglues.so
+    - name: Install llvm
+      run: sudo apt-get update && sudo apt-get install -y llvm
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
+    - name: Strip
+      run: |
+        cd src/main/cpp/build/
+        llvm-strip libmobileglues.so
+
+    - name: Upload
+      uses: actions/upload-artifact@main
       with:
         name: MobileGlues
         path: src/main/cpp/build/libmobileglues.so
