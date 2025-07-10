@@ -2,48 +2,69 @@ name: Build MobileGlues for Android
 
 on:
   workflow_dispatch:
-  
+
 env:
-  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: RelWithDebInfo
+  ANDROID_ABI: arm64-v8a
+  ANDROID_PLATFORM: android-29
+  NDK_VERSION: "25.1.8937393"
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    strategy:      
-      fail-fast: false
-
     steps:
-    - uses: actions/checkout@main
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
+    - name: Setup Android NDK
+      uses: android-actions/setup-android-ndk@v1
+      with:
+        ndk-version: ${{ env.NDK_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build ccache
+
+    - name: Cache build artifacts
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.ccache
+          src/main/cpp/3rdparty
+        key: ${{ runner.os }}-ccache-${{ hashFiles('CMakeLists.txt') }}
+
+    - name: Fetch external libraries
+      run: |
+        mkdir -p src/main/cpp/3rdparty
+        git clone --depth 1 --branch stable https://github.com/g-truc/glm.git src/main/cpp/include/glm || true
+        git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash || true
     - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       run: |
-            cd src/main/cpp
-            mkdir -p build
-            git clone --depth 1 https://github.com/g-truc/glm.git src/main/cpp/include/glm
-            git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash
-            cmake -B build \
-            -DANDROID_ABI="arm64-v8a" \
-            -DANDROID_PLATFORM="android-29" \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_TOOLCHAIN=clang
+        cd src/main/cpp
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DANDROID_ABI=${{ env.ANDROID_ABI }} \
+          -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
-    - name: Build
-      run: cmake --build src/main/cpp/build --config RelWithDebInfo --target mobileglues
-
-    - name: Install llvm
-      run: sudo apt-get update && sudo apt-get install -y llvm
-
-    - name: Strip
+    - name: Build with Ninja
       run: |
-        cd src/main/cpp/build/
-        llvm-strip --strip-all libmobileglues.so
+        cd src/main/cpp/build
+        ninja -j $(nproc) mobileglues
 
-    - name: Upload
-      uses: actions/upload-artifact@main
+    - name: Strip binary
+      run: |
+        $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
+          --strip-all src/main/cpp/build/libmobileglues.so
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
       with:
         name: MobileGlues
         path: src/main/cpp/build/libmobileglues.so
