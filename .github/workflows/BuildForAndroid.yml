@@ -8,6 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+
+    strategy:
+      fail-fast: false
 
     
     steps:
@@ -32,12 +36,12 @@ jobs:
         cmake -B build \
         -DANDROID_ABI=arm64-v8a \
         -DANDROID_PLATFORM=android-29 \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
         -DANDROID_TOOLCHAIN=clang
 
     - name: Build
-      run: cmake --build src/main/cpp/build --config RelWithDebInfo --target mobileglues
+      run: cmake --build src/main/cpp/build --config Release --target mobileglues
 
     
     - name: Strip
