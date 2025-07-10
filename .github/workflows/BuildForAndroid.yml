@@ -7,11 +7,12 @@ env:
   BUILD_TYPE: RelWithDebInfo
   ANDROID_ABI: arm64-v8a
   ANDROID_PLATFORM: android-29
-  NDK_VERSION: "25.1.8937393"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
 
     steps:
     - name: Checkout code
@@ -19,52 +20,58 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Setup Android NDK
-      uses: android-actions/setup-android-ndk@v1
+    - name: Setup Android environment
+      uses: android-actions/setup-android@v3
       with:
-        ndk-version: ${{ env.NDK_VERSION }}
+        ndk-version: 25.1.8937393
 
-    - name: Install dependencies
+    - name: Install build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ninja-build ccache
+        sudo apt-get install -y \
+          llvm \
+          ccache \
+          ninja-build
 
-    - name: Cache build artifacts
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.ccache
-          src/main/cpp/3rdparty
-        key: ${{ runner.os }}-ccache-${{ hashFiles('CMakeLists.txt') }}
-
-    - name: Fetch external libraries
+    - name: Prepare dependencies
       run: |
         mkdir -p src/main/cpp/3rdparty
-        git clone --depth 1 --branch stable https://github.com/g-truc/glm.git src/main/cpp/include/glm || true
-        git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash || true
-    - name: Configure CMake
+        git clone --depth 1 https://github.com/g-truc/glm.git src/main/cpp/include/glm
+        git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash
+
+    - name: Configure ccache
       run: |
-        cd src/main/cpp
-        cmake -B build -G Ninja \
+        ccache --set-config=max_size=1G
+        ccache --zero-stats
+        echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache" >> $GITHUB_ENV
+
+    - name: Configure CMake
+      working-directory: src/main/cpp
+      run: |
+        mkdir -p build && cd build
+        cmake .. \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DANDROID_ABI=${{ env.ANDROID_ABI }} \
           -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
-          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
           -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_MAKE_PROGRAM=ninja \
+          -GNinja
 
-    - name: Build with Ninja
+    - name: Build MobileGlues
+      working-directory: src/main/cpp/build
       run: |
-        cd src/main/cpp/build
-        ninja -j $(nproc) mobileglues
+        cmake --build . --target mobileglues -j $(nproc)
+        ccache --show-stats
 
     - name: Strip binary
       run: |
-        $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
+        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
           --strip-all src/main/cpp/build/libmobileglues.so
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MobileGlues
         path: src/main/cpp/build/libmobileglues.so
