@@ -41,11 +41,17 @@ jobs:
       run: |
         mkdir -p src/main/cpp/include
         mkdir -p src/main/cpp/3rdparty
+        
         rm -rf src/main/cpp/include/glm
         rm -rf src/main/cpp/3rdparty/xxhash
         
         git clone --depth 1 https://github.com/g-truc/glm.git src/main/cpp/include/glm
         git clone --depth 1 https://github.com/stbrumme/xxhash.git src/main/cpp/3rdparty/xxhash
+
+    - name: Fix header includes
+      run: |
+        sed -i 's/#include <__stddef_size_t.h>/#include <cstddef>/g' src/main/cpp/config/settings.h
+        sed -i 's/#include <__stddef_size_t.h>/#include <cstddef>/g' src/main/cpp/main.cpp
 
     - name: Configure ccache
       run: |
