@@ -16,10 +16,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # 可选：安装 Android NDK
-    # - uses: android-actions/setup-android@v3
-    #   with:
-    #     ndk: true
 
     - name: Configure CMake
       run: |
@@ -35,13 +31,11 @@ jobs:
     - name: Build
       run: cmake --build src/main/cpp/build --config Release --target mobileglues
 
-    - name: Install llvm
-      run: sudo apt-get update && sudo apt-get install -y llvm
-
     - name: Strip
       run: |
         cd src/main/cpp/build/
-        llvm-strip libmobileglues.so
+        $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip libmobileglues.so
+        
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
