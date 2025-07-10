@@ -18,6 +18,11 @@ jobs:
     #   with:
     #     ndk: true
 
+    
+    - name: Install llvm
+      run: sudo apt-get update && sudo apt-get install -y llvm
+
+
     - name: Configure CMake
       run: |
         cd src/main/cpp
@@ -34,9 +39,7 @@ jobs:
     - name: Build
       run: cmake --build src/main/cpp/build --config Release --target mobileglues
 
-    - name: Install llvm
-      run: sudo apt-get update && sudo apt-get install -y llvm
-
+    
     - name: Strip
       run: |
         cd src/main/cpp/build/
