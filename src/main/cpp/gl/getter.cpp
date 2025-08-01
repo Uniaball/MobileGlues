@@ -211,7 +211,7 @@ const GLubyte * glGetString( GLenum name ) {
     switch (name) {
         case GL_VENDOR: {
             if(vendorString.empty()) {
-                std::string vendor = "Swung0x48, BZLZHH, Tungsten";
+                std::string vendor = "U大帝";
                 vendorString = vendor;
             }
             return (const GLubyte *)vendorString.c_str();
@@ -220,11 +220,11 @@ const GLubyte * glGetString( GLenum name ) {
             if (versionString.empty()) {
                 versionString = GLVersion.toString();
                 if (GLVersion.toInt(2) == DEFAULT_GL_VERSION) {
-					versionString += " MobileGlues ";
+					versionString += " DesktopGlues ";
                 }
                 else {
 					Version defaultVersion = Version(DEFAULT_GL_VERSION);
-                    versionString += " §4§l(" + defaultVersion.toString() + ") MobileGlues§r ";
+                    versionString += " §4§l(" + defaultVersion.toString() + ") DesktopGlues§r ";
                 }
 
                 versionString += std::to_string(MAJOR) + "."
