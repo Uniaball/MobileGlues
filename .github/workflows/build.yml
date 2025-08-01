@@ -21,7 +21,7 @@ jobs:
     - name: Configure CMake
       run: |
         cd src/main/cpp
-        git clone --depth 1 https://github.com/g-truc/glm.git include/glm
+        git clone --depth 1 https://github.com/g-truc/glm.git 3rdparty/glm
         git clone --depth 1 https://github.com/stbrumme/xxhash.git 3rdparty/xxhash
         cmake -B build \
         -DANDROID_ABI=arm64-v8a \
