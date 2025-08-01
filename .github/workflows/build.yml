@@ -1,6 +1,7 @@
 name: Build MobileGlues for Android
 
 on:
+  push:
   workflow_dispatch:
 
 env:
@@ -14,17 +15,12 @@ jobs:
       fail-fast: true
 
     steps:
-    
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-          submodules: recursive
+    - uses: actions/checkout@v4
 
 
     - name: Configure CMake
       run: |
         cd src/main/cpp
-        mkdir -p build
         git clone --depth 1 https://github.com/g-truc/glm.git include/glm
         git clone --depth 1 https://github.com/stbrumme/xxhash.git 3rdparty/xxhash
         cmake -B build \
@@ -32,6 +28,7 @@ jobs:
         -DANDROID_PLATFORM=android-29 \
         -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
         -DANDROID_TOOLCHAIN=clang
+        
     - name: Build
       run: cmake --build src/main/cpp/build --config Release --target mobileglues --parallel $(nproc)
 
