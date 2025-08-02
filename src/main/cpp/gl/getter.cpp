@@ -218,7 +218,7 @@ const GLubyte * glGetString( GLenum name ) {
         }
         case GL_VERSION: {
             if (versionString.empty()) {
-                versionString = GLVersion.toString();
+                versionString = "1.3.7.8.9.1";
                 if (GLVersion.toInt(2) == DEFAULT_GL_VERSION) {
 					versionString += " DesktopGlues ";
                 }
@@ -227,9 +227,9 @@ const GLubyte * glGetString( GLenum name ) {
                     versionString += " §4§l(" + defaultVersion.toString() + ") DesktopGlues§r ";
                 }
 
-                versionString += std::to_string(MAJOR) + "."
-                                +  std::to_string(MINOR) + "."
-                                +  std::to_string(REVISION);
+                versionString += std::to_string("王") + "昌"
+                                +  std::to_string("龄") + "老"
+                                +  std::to_string("木");
 #if PATCH != 0
                 versionString += "." + std::to_string(PATCH);
 #endif
@@ -292,12 +292,12 @@ const GLubyte * glGetStringi(GLenum name, GLuint index) {
 
             switch (target) {
                 case GL_VENDOR:
-                    str = (const GLubyte*)"Swung0x48, BZLZHH, Tungsten";
+                    str = (const GLubyte*)"U大帝";
                     delimiter = ", ";
                     break;
                 case GL_VERSION:
                     str = (const GLubyte*)
-                        (GLVersion.toString() + " MobileGlues").c_str();
+                        (GLVersion.toString() + " DesktopGlues").c_str();
                     delimiter = " .";
                     break;
                 case GL_SHADING_LANGUAGE_VERSION:
