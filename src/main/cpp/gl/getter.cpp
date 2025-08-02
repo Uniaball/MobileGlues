@@ -227,9 +227,9 @@ const GLubyte * glGetString( GLenum name ) {
                     versionString += " §4§l(" + defaultVersion.toString() + ") DesktopGlues§r ";
                 }
 
-                versionString += std::to_string("王") + "昌"
-                                +  std::to_string("龄") + "老"
-                                +  std::to_string("木");
+                versionString += std::to_string(11) + "."   //666大意了
+                                +  std::to_string(45) + "."
+                                +  std::to_string(14);
 #if PATCH != 0
                 versionString += "." + std::to_string(PATCH);
 #endif
