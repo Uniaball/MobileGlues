@@ -220,11 +220,11 @@ const GLubyte * glGetString( GLenum name ) {
             if (versionString.empty()) {
                 versionString = "1.3.7.8.9.1";
                 if (GLVersion.toInt(2) == DEFAULT_GL_VERSION) {
-					versionString += " DesktopGlues ";
+					versionString += " MobileGlues加强版☠️☠️☠️ ";
                 }
                 else {
 					Version defaultVersion = Version(DEFAULT_GL_VERSION);
-                    versionString += " §4§l(" + defaultVersion.toString() + ") DesktopGlues§r ";
+                    versionString += " §4§l(" + defaultVersion.toString() + ") MobileGlues加强版☠️☠️☠️§r ";
                 }
 
                 versionString += std::to_string(11) + "."   //666大意了
