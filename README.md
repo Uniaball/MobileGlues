@@ -14,7 +14,7 @@
      precision highp int;
      ```
 
-2. MobileGlues (since V1.2.6.0) injects these macros into your shaders:
+2. MobileGlues (since V1.2.6) injects these macros into your shaders:
    ```glsl
    #define MG_MOBILEGLUES                   // Indicates MobileGlues environment
    #define MG_MOBILEGLUES_VERSION 1260      // Version number (e.g. 1260 = V1.2.6)

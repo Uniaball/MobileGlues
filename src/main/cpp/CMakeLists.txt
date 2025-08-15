@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD 20)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 if(MACOS)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w -fvisibility=default -funwind-tables -g -D_THREAD_SAFE -fPIC -stdlib=libc++")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w -g -std=gnu99 -funwind-tables -O3 -fvisibility=hidden")
@@ -113,6 +115,17 @@ else()
                 android
                 log
         )
+endif()
+
+if(ANDROID)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libspirv-cross-c-shared.so
+            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libshaderconv.so
+            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
+    )
 endif()
 
 if (PROFILING)

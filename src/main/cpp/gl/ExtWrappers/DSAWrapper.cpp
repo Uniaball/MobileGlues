@@ -62,7 +62,7 @@ GLenum GetBindingQuery(GLenum target, bool forceTexture = false) {
 	case GL_DEBUG_OUTPUT_SYNCHRONOUS:      return GL_DEBUG_OUTPUT_SYNCHRONOUS;
 
 	default:
-		LOG_E("[DSA] GetBindingQuery: unknown target %u", target);
+		LOG_W("[DSA] GetBindingQuery: unknown target %u", target);
 		return 0;
 	}
 }
@@ -75,7 +75,7 @@ void temporarilyBindBuffer(GLuint bufferID, GLenum target = GL_ARRAY_BUFFER) {
 	glGetIntegerv(bindingQuery, &prev);
 	if (prev == bufferID) {
 		bufferBindingStack[target].push_back(-1);
-		return;
+		// return;
 	}
 	bufferBindingStack[target].push_back(static_cast<GLuint>(prev));
 
@@ -88,7 +88,7 @@ void restoreTemporaryBufferBinding(GLenum target = GL_ARRAY_BUFFER) {
 	auto it = bufferBindingStack.find(target);
 	if (it == bufferBindingStack.end() || it->second.empty()) {
 	LOG_D("[DSA] [Restore] no saved binding for target 0x%X", target);
-		return;
+		// return;
 	}
 
 	GLuint toRestore = it->second.back();
@@ -96,7 +96,7 @@ void restoreTemporaryBufferBinding(GLenum target = GL_ARRAY_BUFFER) {
 
 	if (toRestore == static_cast<GLuint>(-1)) {
 		LOG_D("[DSA] [Restore] target=0x%X, no binding to restore", target);
-		return;
+		// return;
 	}
 
 	LOG_D("[DSA] [Restore] target=0x%X, bind back to %u", target, toRestore);
@@ -113,15 +113,15 @@ void glCreateBuffers(GLsizei n, GLuint* buffers) {
 	LOG_D("[DSA] glCreateBuffers, n: %d, buffers: %p", n, buffers);
 	
 	if (n <= 0 || !buffers) {
-		LOG_E("[DSA] Invalid parameters for glCreateBuffers");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateBuffers");
+		// return;
 	}
 
 	for (GLsizei i = 0; i < n; ++i) {
 		GLuint bufID = 0;
 		glGenBuffers(1, &bufID);
 		if (bufID == 0) {
-			LOG_E("[DSA] Failed to create buffer at index %d", i);
+			LOG_W("[DSA] Failed to create buffer at index %d", i);
 			continue;
 		}
 
@@ -139,8 +139,8 @@ void glNamedBufferStorage(GLuint buffer, GLsizeiptr size, const void* data, GLbi
 	LOG_D("[DSA] glNamedBufferStorage, buffer: %u, size: %lld, data: %p, flags: %u", buffer, size, data, flags);
 	
 	if (buffer == 0 || size <= 0) {
-		LOG_E("[DSA] Invalid parameters for glNamedBufferStorage");
-		return;
+		LOG_W("[DSA] Invalid parameters for glNamedBufferStorage");
+		// return;
 	}
 
 	temporarilyBindBuffer(buffer);
@@ -156,8 +156,8 @@ void glNamedBufferData(GLuint buffer, GLsizeiptr size, const void* data, GLenum 
 	LOG_D("[DSA] glNamedBufferData, buffer: %u, size: %lld, data: %p, usage: %u", buffer, size, data, usage);
 	
 	if (buffer == 0 || size <= 0) {
-		LOG_E("[DSA] Invalid parameters for glNamedBufferData");
-		return;
+		LOG_W("[DSA] Invalid parameters for glNamedBufferData");
+		// return;
 	}
 	
 	temporarilyBindBuffer(buffer);
@@ -173,8 +173,8 @@ void glNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, const
 	LOG_D("[DSA] glNamedBufferSubData, buffer: %u, offset: %lld, size: %lld, data: %p", buffer, offset, size, data);
 	
 	if (buffer == 0 || size <= 0 || offset < 0) {
-		LOG_E("[DSA] Invalid parameters for glNamedBufferSubData");
-		return;
+		LOG_W("[DSA] Invalid parameters for glNamedBufferSubData");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glBufferSubData(GL_ARRAY_BUFFER, offset, size, data);
@@ -189,8 +189,8 @@ void glCopyNamedBufferSubData(GLuint readBuffer, GLuint writeBuffer, GLintptr re
 	LOG_D("[DSA] glCopyNamedBufferSubData, readBuffer: %u, writeBuffer: %u, readOffset: %lld, writeOffset: %lld, size: %lld", readBuffer, writeBuffer, readOffset, writeOffset, size);
 	
 	if (readBuffer == 0 || writeBuffer == 0 || size <= 0 || readOffset < 0 || writeOffset < 0) {
-		LOG_E("[DSA] Invalid parameters for glCopyNamedBufferSubData");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCopyNamedBufferSubData");
+		// return;
 	}
 	temporarilyBindBuffer(readBuffer, GL_COPY_READ_BUFFER);
 	temporarilyBindBuffer(writeBuffer, GL_COPY_WRITE_BUFFER);
@@ -206,8 +206,8 @@ void glClearNamedBufferData(GLuint buffer, GLenum internalformat, GLenum format,
 	LOG_D("[DSA] glClearNamedBufferData, buffer: %u, internalformat: 0x%X, format: 0x%X, type: 0x%X, data: %p", buffer, internalformat, format, type, data);
 	
 	if (buffer == 0) {
-		LOG_E("[DSA] Invalid buffer ID for glClearNamedBufferData");
-		return;
+		LOG_W("[DSA] Invalid buffer ID for glClearNamedBufferData");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glClearBufferData(GL_ARRAY_BUFFER, internalformat, format, type, data);
@@ -222,8 +222,8 @@ void glClearNamedBufferSubData(GLuint buffer, GLenum internalformat, GLintptr of
 	LOG_D("[DSA] glClearNamedBufferSubData, buffer: %u, internalformat: 0x%X, offset: %lld, size: %lld, format: 0x%X, type: 0x%X, data: %p", buffer, internalformat, offset, size, format, type, data);
 	
 	if (buffer == 0 || size <= 0 || offset < 0) {
-		LOG_E("[DSA] Invalid parameters for glClearNamedBufferSubData");
-		return;
+		LOG_W("[DSA] Invalid parameters for glClearNamedBufferSubData");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glClearBufferSubData(GL_ARRAY_BUFFER, internalformat, offset, size, format, type, data);
@@ -238,7 +238,7 @@ void* glMapNamedBuffer(GLuint buffer, GLenum access) {
 	LOG_D("[DSA] glMapNamedBuffer, buffer: %u, access: 0x%X", buffer, access);
 	
 	if (buffer == 0) {
-		LOG_E("[DSA] Invalid buffer ID for glMapNamedBuffer");
+		LOG_W("[DSA] Invalid buffer ID for glMapNamedBuffer");
 		return nullptr;
 	}
 	temporarilyBindBuffer(buffer);
@@ -247,7 +247,7 @@ void* glMapNamedBuffer(GLuint buffer, GLenum access) {
 	restoreTemporaryBufferBinding();
 	
 	if (!mappedData) {
-		LOG_E("[DSA] Failed to map buffer %u", buffer);
+		LOG_W("[DSA] Failed to map buffer %u", buffer);
 	} else {
 	LOG_D("[DSA] Mapped buffer %u successfully", buffer);
 	}
@@ -259,7 +259,7 @@ GLvoid* glMapNamedBufferRange(GLuint buffer, GLintptr offset, GLsizeiptr length,
 	LOG_D("[DSA] glMapNamedBufferRange, buffer: %u, offset: %lld, length: %lld, access: 0x%X", buffer, offset, length, access);
 	
 	if (buffer == 0 || length <= 0 || offset < 0) {
-		LOG_E("[DSA] Invalid parameters for glMapNamedBufferRange");
+		LOG_W("[DSA] Invalid parameters for glMapNamedBufferRange");
 		return nullptr;
 	}
 	temporarilyBindBuffer(buffer);
@@ -268,7 +268,7 @@ GLvoid* glMapNamedBufferRange(GLuint buffer, GLintptr offset, GLsizeiptr length,
 	restoreTemporaryBufferBinding();
 	
 	if (!mappedData) {
-		LOG_E("[DSA] Failed to map buffer range for buffer %u", buffer);
+		LOG_W("[DSA] Failed to map buffer range for buffer %u", buffer);
 	} else {
 	LOG_D("[DSA] Mapped buffer range for buffer %u successfully", buffer);
 	}
@@ -280,7 +280,7 @@ GLboolean glUnmapNamedBuffer(GLuint buffer) {
 	LOG_D("[DSA] glUnmapNamedBuffer, buffer: %u", buffer);
 	
 	if (buffer == 0) {
-		LOG_E("[DSA] Invalid buffer ID for glUnmapNamedBuffer");
+		LOG_W("[DSA] Invalid buffer ID for glUnmapNamedBuffer");
 		return GL_FALSE;
 	}
 	temporarilyBindBuffer(buffer);
@@ -289,7 +289,7 @@ GLboolean glUnmapNamedBuffer(GLuint buffer) {
 	restoreTemporaryBufferBinding();
 	
 	if (result == GL_FALSE) {
-		LOG_E("[DSA] Failed to unmap buffer %u", buffer);
+		LOG_W("[DSA] Failed to unmap buffer %u", buffer);
 	} else {
 	LOG_D("[DSA] Unmapped buffer %u successfully", buffer);
 	}
@@ -301,8 +301,8 @@ void glFlushMappedNamedBufferRange(GLuint buffer, GLintptr offset, GLsizeiptr le
 	LOG_D("[DSA] glFlushMappedNamedBufferRange, buffer: %u, offset: %lld, length: %lld", buffer, offset, length);
 	
 	if (buffer == 0 || length <= 0 || offset < 0) {
-		LOG_E("[DSA] Invalid parameters for glFlushMappedNamedBufferRange");
-		return;
+		LOG_W("[DSA] Invalid parameters for glFlushMappedNamedBufferRange");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glFlushMappedBufferRange(GL_ARRAY_BUFFER, offset, length);
@@ -317,8 +317,8 @@ void glGetNamedBufferParameteriv(GLuint buffer, GLenum pname, GLint* params) {
 	LOG_D("[DSA] glGetNamedBufferParameteriv, buffer: %u, pname: 0x%X, params: %p", buffer, pname, params);
 	
 	if (buffer == 0 || !params) {
-		LOG_E("[DSA] Invalid parameters for glGetNamedBufferParameteriv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetNamedBufferParameteriv");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glGetBufferParameteriv(GL_ARRAY_BUFFER, pname, params);
@@ -333,8 +333,8 @@ void glGetNamedBufferParameteri64v(GLuint buffer, GLenum pname, GLint64* params)
 	LOG_D("[DSA] glGetNamedBufferParameteri64v, buffer: %u, pname: 0x%X, params: %p", buffer, pname, params);
 	
 	if (buffer == 0 || !params) {
-		LOG_E("[DSA] Invalid parameters for glGetNamedBufferParameteri64v");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetNamedBufferParameteri64v");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glGetBufferParameteri64v(GL_ARRAY_BUFFER, pname, params);
@@ -349,8 +349,8 @@ void glGetNamedBufferPointerv(GLuint buffer, GLenum pname, void** params) {
 	LOG_D("[DSA] glGetNamedBufferPointerv, buffer: %u, pname: 0x%X, params: %p", buffer, pname, params);
 	
 	if (buffer == 0 || !params) {
-		LOG_E("[DSA] Invalid parameters for glGetNamedBufferPointerv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetNamedBufferPointerv");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glGetBufferPointerv(GL_ARRAY_BUFFER, pname, params);
@@ -365,8 +365,8 @@ void glGetNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, vo
 	LOG_D("[DSA] glGetNamedBufferSubData, buffer: %u, offset: %lld, size: %lld, data: %p", buffer, offset, size, data);
 	
 	if (buffer == 0 || size <= 0 || offset < 0 || !data) {
-		LOG_E("[DSA] Invalid parameters for glGetNamedBufferSubData");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetNamedBufferSubData");
+		// return;
 	}
 	temporarilyBindBuffer(buffer);
 	glGetBufferSubData(GL_ARRAY_BUFFER, offset, size, data);
@@ -384,7 +384,7 @@ void temporarilyBindFramebuffer(GLuint framebufferID, GLenum target = GL_DRAW_FR
 	glGetIntegerv(bindingQuery, &prev);
 	if (prev == framebufferID) {
 		framebufferBindingStack[target].push_back(-1);
-		return;
+		// return;
 	}
 	framebufferBindingStack[target].push_back(static_cast<GLuint>(prev));
 	LOG_D("[DSA] [TempBind] target=0x%X, prev=%u -> bind=%u", target, prev, framebufferID);
@@ -396,13 +396,13 @@ void restoreTemporaryFramebufferBinding(GLenum target = GL_DRAW_FRAMEBUFFER) {
 	auto it = framebufferBindingStack.find(target);
 	if (it == framebufferBindingStack.end() || it->second.empty()) {
 	LOG_D("[DSA] [Restore] no saved binding for target 0x%X", target);
-		return;
+		// return;
 	}
 	GLuint toRestore = it->second.back();
 	it->second.pop_back();
 	if (toRestore == static_cast<GLuint>(-1)) {
 		LOG_D("[DSA] [Restore] target=0x%X, no binding to restore", target);
-		return;
+		// return;
 	}
 	LOG_D("[DSA] [Restore] target=0x%X, bind back to %u", target, toRestore);
 	CHECK_GL_ERROR;
@@ -417,14 +417,14 @@ void glCreateFramebuffers(GLsizei n, GLuint* framebuffers) {
 	LOG_D("[DSA] glCreateFramebuffers, n: %d, framebuffers: %p", n, framebuffers);
 	
 	if (n <= 0 || !framebuffers) {
-		LOG_E("[DSA] Invalid parameters for glCreateFramebuffers");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateFramebuffers");
+		// return;
 	}
 	for (GLsizei i = 0; i < n; ++i) {
 		GLuint fboID = 0;
 		glGenFramebuffers(1, &fboID);
 		if (fboID == 0) {
-			LOG_E("[DSA] Failed to create framebuffer at index %d", i);
+			LOG_W("[DSA] Failed to create framebuffer at index %d", i);
 			continue;
 		}
 		temporarilyBindFramebuffer(fboID); // after binding, the framebuffer object should be created
@@ -502,8 +502,8 @@ void glNamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n, const GLenum* 
 	LOG_D("[DSA] glNamedFramebufferDrawBuffers, framebuffer: %u, n: %d, bufs: %p", framebuffer, n, bufs);
 	
 	if (n <= 0 || !bufs) {
-		LOG_E("[DSA] Invalid parameters for glNamedFramebufferDrawBuffers");
-		return;
+		LOG_W("[DSA] Invalid parameters for glNamedFramebufferDrawBuffers");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer);
 	glDrawBuffers(n, bufs);
@@ -530,8 +530,8 @@ void glInvalidateNamedFramebufferData(GLuint framebuffer, GLsizei numAttachments
 	LOG_D("[DSA] glInvalidateNamedFramebufferData, framebuffer: %u, numAttachments: %d, attachments: %p", framebuffer, numAttachments, attachments);
 	
 	if (numAttachments <= 0 || !attachments) {
-		LOG_E("[DSA] Invalid parameters for glInvalidateNamedFramebufferData");
-		return;
+		LOG_W("[DSA] Invalid parameters for glInvalidateNamedFramebufferData");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer, GL_READ_FRAMEBUFFER);
 	temporarilyBindFramebuffer(framebuffer, GL_DRAW_FRAMEBUFFER);
@@ -548,8 +548,8 @@ void glInvalidateNamedFramebufferSubData(GLuint framebuffer, GLsizei numAttachme
 	LOG_D("[DSA] glInvalidateNamedFramebufferSubData, framebuffer: %u, numAttachments: %d, attachments: %p, x: %d, y: %d, width: %d, height: %d", framebuffer, numAttachments, attachments, x, y, width, height);
 	
 	if (numAttachments <= 0 || !attachments || width <= 0 || height <= 0) {
-		LOG_E("[DSA] Invalid parameters for glInvalidateNamedFramebufferSubData");
-		return;
+		LOG_W("[DSA] Invalid parameters for glInvalidateNamedFramebufferSubData");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer, GL_READ_FRAMEBUFFER);
 	temporarilyBindFramebuffer(framebuffer, GL_DRAW_FRAMEBUFFER);
@@ -566,8 +566,8 @@ void glClearNamedFramebufferiv(GLuint framebuffer, GLenum buffer, GLint drawbuff
 	LOG_D("[DSA] glClearNamedFramebufferiv, framebuffer: %u, buffer: 0x%X, drawbuffer: %d, value: %p", framebuffer, buffer, drawbuffer, value);
 	
 	if (!value) {
-		LOG_E("[DSA] Invalid parameters for glClearNamedFramebufferiv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glClearNamedFramebufferiv");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer);
 	glClearBufferiv(buffer, drawbuffer, value);
@@ -582,8 +582,8 @@ void glClearNamedFramebufferuiv(GLuint framebuffer, GLenum buffer, GLint drawbuf
 	LOG_D("[DSA] glClearNamedFramebufferuiv, framebuffer: %u, buffer: 0x%X, drawbuffer: %d, value: %p", framebuffer, buffer, drawbuffer, value);
 	
 	if (!value) {
-		LOG_E("[DSA] Invalid parameters for glClearNamedFramebufferuiv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glClearNamedFramebufferuiv");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer);
 	glClearBufferuiv(buffer, drawbuffer, value);
@@ -598,8 +598,8 @@ void glClearNamedFramebufferfv(GLuint framebuffer, GLenum buffer, GLint drawbuff
 	LOG_D("[DSA] glClearNamedFramebufferfv, framebuffer: %u, buffer: 0x%X, drawbuffer: %d, value: %p", framebuffer, buffer, drawbuffer, value);
 	
 	if (!value) {
-		LOG_E("[DSA] Invalid parameters for glClearNamedFramebufferfv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glClearNamedFramebufferfv");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer);
 	glClearBufferfv(buffer, drawbuffer, value);
@@ -657,8 +657,8 @@ void glGetNamedFramebufferParameteriv(GLuint framebuffer, GLenum pname, GLint* p
 	LOG_D("[DSA] glGetNamedFramebufferParameteriv, framebuffer: %u, pname: 0x%X, param: %p", framebuffer, pname, param);
 	
 	if (!param) {
-		LOG_E("[DSA] Invalid parameters for glGetNamedFramebufferParameteriv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetNamedFramebufferParameteriv");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer);
 	glGetFramebufferParameteriv(GL_DRAW_FRAMEBUFFER, pname, param);
@@ -673,8 +673,8 @@ void glGetNamedFramebufferAttachmentParameteriv(GLuint framebuffer, GLenum attac
 	LOG_D("[DSA] glGetNamedFramebufferAttachmentParameteriv, framebuffer: %u, attachment: 0x%X, pname: 0x%X, params: %p", framebuffer, attachment, pname, params);
 	
 	if (!params) {
-		LOG_E("[DSA] Invalid parameters for glGetNamedFramebufferAttachmentParameteriv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetNamedFramebufferAttachmentParameteriv");
+		// return;
 	}
 	temporarilyBindFramebuffer(framebuffer);
 	glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, attachment, pname, params);
@@ -692,7 +692,7 @@ void temporarilyBindRenderbuffer(GLuint renderbufferID) {
 	glGetIntegerv(bindingQuery, &prev);
 	if (prev == renderbufferID) {
 		renderbufferBindingStack[GL_RENDERBUFFER].push_back(-1);
-		return;
+		// return;
 	}
 	renderbufferBindingStack[GL_RENDERBUFFER].push_back(static_cast<GLuint>(prev));
 	LOG_D("[DSA] [TempBind] prev=%u -> bind=%u", prev, renderbufferID);
@@ -704,13 +704,13 @@ void restoreTemporaryRenderbufferBinding() {
 	auto it = renderbufferBindingStack.find(GL_RENDERBUFFER);
 	if (it == renderbufferBindingStack.end() || it->second.empty()) {
 		LOG_D("[DSA] [Restore] no saved binding for GL_RENDERBUFFER");
-		return;
+		// return;
 	}
 	GLuint toRestore = it->second.back();
 	it->second.pop_back();
 	if (toRestore == static_cast<GLuint>(-1)) {
 		LOG_D("[DSA] [Restore] no binding to restore for GL_RENDERBUFFER");
-		return;
+		// return;
 	}
 	LOG_D("[DSA] [Restore] bind back to %u", toRestore);
 	CHECK_GL_ERROR;
@@ -725,14 +725,14 @@ void glCreateRenderbuffers(GLsizei n, GLuint* renderbuffers) {
 	LOG_D("[DSA] glCreateRenderbuffers, n: %d, renderbuffers: %p", n, renderbuffers);
 	
 	if (n <= 0 || !renderbuffers) {
-		LOG_E("[DSA] Invalid parameters for glCreateRenderbuffers");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateRenderbuffers");
+		// return;
 	}
 	for (GLsizei i = 0; i < n; ++i) {
 		GLuint rboID = 0;
 		glGenRenderbuffers(1, &rboID);
 		if (rboID == 0) {
-			LOG_E("[DSA] Failed to create renderbuffer at index %d", i);
+			LOG_W("[DSA] Failed to create renderbuffer at index %d", i);
 			continue;
 		}
 		temporarilyBindRenderbuffer(rboID); // after binding, the renderbuffer object should be created
@@ -749,8 +749,8 @@ void glNamedRenderbufferStorage(GLuint renderbuffer, GLenum internalformat, GLsi
 	LOG_D("[DSA] glNamedRenderbufferStorage, renderbuffer: %u, internalformat: 0x%X, width: %d, height: %d", renderbuffer, internalformat, width, height);
 	
 	if (renderbuffer == 0 || width <= 0 || height <= 0) {
-		LOG_E("[DSA] Invalid parameters for glNamedRenderbufferStorage");
-		return;
+		LOG_W("[DSA] Invalid parameters for glNamedRenderbufferStorage");
+		// return;
 	}
 	temporarilyBindRenderbuffer(renderbuffer);
 	glRenderbufferStorage(GL_RENDERBUFFER, internalformat, width, height);
@@ -765,8 +765,8 @@ void glNamedRenderbufferStorageMultisample(GLuint renderbuffer, GLsizei samples,
 	LOG_D("[DSA] glNamedRenderbufferStorageMultisample, renderbuffer: %u, samples: %d, internalformat: 0x%X, width: %d, height: %d", renderbuffer, samples, internalformat, width, height);
 	
 	if (renderbuffer == 0 || samples <= 0 || width <= 0 || height <= 0) {
-		LOG_E("[DSA] Invalid parameters for glNamedRenderbufferStorageMultisample");
-		return;
+		LOG_W("[DSA] Invalid parameters for glNamedRenderbufferStorageMultisample");
+		// return;
 	}
 	temporarilyBindRenderbuffer(renderbuffer);
 	glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, internalformat, width, height);
@@ -781,8 +781,8 @@ void glGetNamedRenderbufferParameteriv(GLuint renderbuffer, GLenum pname, GLint*
 	LOG_D("[DSA] glGetNamedRenderbufferParameteriv, renderbuffer: %u, pname: 0x%X, params: %p", renderbuffer, pname, params);
 	
 	if (renderbuffer == 0 || !params) {
-		LOG_E("[DSA] Invalid parameters for glGetNamedRenderbufferParameteriv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetNamedRenderbufferParameteriv");
+		// return;
 	}
 	temporarilyBindRenderbuffer(renderbuffer);
 	glGetRenderbufferParameteriv(GL_RENDERBUFFER, pname, params);
@@ -806,7 +806,7 @@ void temporarilyBindTexture(GLuint textureID, GLenum possibleTarget = 0) {
 	glGetIntegerv(bindingQuery, &prev);
 	if (prev == static_cast<GLint>(textureID)) {
 		textureBindingStack[target].push_back(-1);
-		return;
+		// return;
 	}
 	textureBindingStack[target].push_back(static_cast<GLuint>(prev));
 	LOG_D("[DSA] [TempBind] target=0x%X, prev=%u -> bind=%u", target, prev, textureID);
@@ -820,14 +820,14 @@ void restoreTemporaryTextureBinding(GLuint textureID, GLenum possibleTarget = 0)
 	auto stackIt = textureBindingStack.find(target);
 	if (stackIt == textureBindingStack.end() || stackIt->second.empty()) {
 		LOG_D("[DSA] [Restore] no saved binding for target 0x%X", target);
-		return;
+		// return;
 	}
 
 	GLuint toRestore = stackIt->second.back();
 	stackIt->second.pop_back();
 	if (toRestore == static_cast<GLuint>(-1)) {
 		LOG_D("[DSA] [Restore] target=0x%X, no binding to restore", target);
-		return;
+		// return;
 	}
 	LOG_D("[DSA] [Restore] target=0x%X, bind back to %u", target, toRestore);
 	CHECK_GL_ERROR;
@@ -844,15 +844,15 @@ void glCreateTextures(GLenum target, GLsizei n, GLuint* textures) {
 		LOG_D("[DSA] glCreateTextures, target: 0x%X, n: %d, textures: %p", target, n, textures);
 
 	if (n <= 0 || !textures) {
-		LOG_E("[DSA] Invalid parameters for glCreateTextures");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateTextures");
+		// return;
 	}
 
 	for (GLsizei i = 0; i < n; ++i) {
 		GLuint texID = 0;
 		glGenTextures(1, &texID);
 		if (texID == 0) {
-			LOG_E("[DSA] Failed to create texture at index %d", i);
+			LOG_W("[DSA] Failed to create texture at index %d", i);
 			continue;
 		}
 		temporarilyBindTexture(texID, target);
@@ -869,8 +869,8 @@ void glTextureBuffer(GLuint texture, GLenum internalformat, GLuint buffer) {
 		LOG_D("[DSA] glTextureBuffer, texture: %u, internalformat: 0x%X, buffer: %u", texture, internalformat, buffer);
 
 	if (buffer == 0) {
-		LOG_E("[DSA] Invalid parameters for glTextureBuffer");
-		return;
+		LOG_W("[DSA] Invalid parameters for glTextureBuffer");
+		// return;
 	}
 
 	temporarilyBindTexture(texture);
@@ -887,8 +887,8 @@ void glTextureBufferRange(GLuint texture, GLenum internalformat, GLuint buffer, 
 			texture, internalformat, buffer, offset, size);
 
 	if (buffer == 0 || size <= 0 || offset < 0) {
-		LOG_E("[DSA] Invalid parameters for glTextureBufferRange");
-		return;
+		LOG_W("[DSA] Invalid parameters for glTextureBufferRange");
+		// return;
 	}
 
 	temporarilyBindTexture(texture);
@@ -1075,8 +1075,8 @@ void glBindTextureUnit(GLuint unit, GLuint texture) {
 		LOG_D("[DSA] glBindTextureUnit, unit: %u, texture: %u", unit, texture);
 
 	if (unit >= GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) {
-		LOG_E("[DSA] Invalid parameters for glBindTextureUnit");
-		return;
+		LOG_W("[DSA] Invalid parameters for glBindTextureUnit");
+		// return;
 	}
 	GLint prevUnit = 0;
 	glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
@@ -1148,7 +1148,7 @@ static thread_local GLint prevVAO = -1;
 void temporarilyBindVertexArray(GLint vaoID) {
 	if (prevVAO == vaoID) {
 		prevVAO = -1;
-		return;
+		// return;
 	}
 	LOG_D("[DSA] [TempBind] VAO: %u -> bind=%u", prevVAO, vaoID);
 	CHECK_GL_ERROR;
@@ -1158,7 +1158,7 @@ void temporarilyBindVertexArray(GLint vaoID) {
 }
 void restoreTemporaryVertexArrayBinding() {
 	if (prevVAO == -1) {
-		return;
+		// return;
 	}
 	LOG_D("[DSA] [Restore] VAO: bind back to %u", prevVAO);
 	CHECK_GL_ERROR;
@@ -1172,14 +1172,14 @@ void glCreateVertexArrays(GLsizei n, GLuint* arrays) {
 	LOG_D("[DSA] glCreateVertexArrays, n: %d, arrays: %p", n, arrays);
 	
 	if (n <= 0 || !arrays) {
-		LOG_E("[DSA] Invalid parameters for glCreateVertexArrays");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateVertexArrays");
+		// return;
 	}
 	for (GLsizei i = 0; i < n; ++i) {
 		GLuint vaoID = 0;
 		glGenVertexArrays(1, &vaoID);
 		if (vaoID == 0) {
-			LOG_E("[DSA] Failed to create vertex array at index %d", i);
+			LOG_W("[DSA] Failed to create vertex array at index %d", i);
 			continue;
 		}
 		temporarilyBindVertexArray(vaoID); // after binding, the vertex array object should be created
@@ -1196,8 +1196,8 @@ void glDisableVertexArrayAttrib(GLuint vaobj, GLuint index) {
 	LOG_D("[DSA] glDisableVertexArrayAttrib, vaobj: %u, index: %u", vaobj, index);
 	
 	if (vaobj == 0 || index >= GL_MAX_VERTEX_ATTRIBS) {
-		LOG_E("[DSA] Invalid parameters for glDisableVertexArrayAttrib");
-		return;
+		LOG_W("[DSA] Invalid parameters for glDisableVertexArrayAttrib");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glDisableVertexAttribArray(index);
@@ -1212,8 +1212,8 @@ void glEnableVertexArrayAttrib(GLuint vaobj, GLuint index) {
 	LOG_D("[DSA] glEnableVertexArrayAttrib, vaobj: %u, index: %u", vaobj, index);
 	
 	if (vaobj == 0 || index >= GL_MAX_VERTEX_ATTRIBS) {
-		LOG_E("[DSA] Invalid parameters for glEnableVertexArrayAttrib");
-		return;
+		LOG_W("[DSA] Invalid parameters for glEnableVertexArrayAttrib");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glEnableVertexAttribArray(index);
@@ -1228,8 +1228,8 @@ void glVertexArrayElementBuffer(GLuint vaobj, GLuint buffer) {
 	LOG_D("[DSA] glVertexArrayElementBuffer, vaobj: %u, buffer: %u", vaobj, buffer);
 	
 	if (vaobj == 0 || buffer == 0) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayElementBuffer");
-		return;
+		LOG_W("[DSA] Invalid parameters for glVertexArrayElementBuffer");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer);
@@ -1244,8 +1244,8 @@ void glVertexArrayVertexBuffer(GLuint vaobj, GLuint bindingindex, GLuint buffer,
 	LOG_D("[DSA] glVertexArrayVertexBuffer, vaobj: %u, bindingindex: %u, buffer: %u, offset: %lld, stride: %d", vaobj, bindingindex, buffer, offset, stride);
 	
 	if (vaobj == 0 || bindingindex >= GL_MAX_VERTEX_ATTRIB_BINDINGS || buffer == 0 || stride < 0 || offset < 0) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayVertexBuffer");
-		return;
+		LOG_W("[DSA] Invalid parameters for glVertexArrayVertexBuffer");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glBindVertexBuffer(bindingindex, buffer, offset, stride);
@@ -1260,8 +1260,8 @@ void glVertexArrayVertexBuffers(GLuint vaobj, GLuint first, GLsizei count, const
 	LOG_D("[DSA] glVertexArrayVertexBuffers, vaobj: %u, first: %u, count: %d, buffers: %p, offsets: %p, strides: %p", vaobj, first, count, buffers, offsets, strides);
 	
 	if (vaobj == 0 || first >= GL_MAX_VERTEX_ATTRIB_BINDINGS || count <= 0 || !buffers || !offsets || !strides) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayVertexBuffers");
-		return;
+		LOG_W("[DSA] Invalid parameters for glVertexArrayVertexBuffers");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glBindVertexBuffers(first, count, buffers, offsets, strides);
@@ -1275,10 +1275,6 @@ void glVertexArrayAttribFormat(GLuint vaobj, GLuint attribindex, GLint size, GLe
 	LOG()
 	LOG_D("[DSA] glVertexArrayAttribFormat, vaobj: %u, attribindex: %u, size: %d, type: 0x%X, normalized: %d, relativeoffset: %u", vaobj, attribindex, size, type, normalized, relativeoffset);
 	
-	if (vaobj == 0 || attribindex >= GL_MAX_VERTEX_ATTRIBS || size <= 0 || (type != GL_FLOAT && type != GL_INT && type != GL_UNSIGNED_INT)) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayAttribFormat");
-		return;
-	}
 	temporarilyBindVertexArray(vaobj);
 	glVertexAttribFormat(attribindex, size, type, normalized, relativeoffset);
 	CHECK_GL_ERROR;
@@ -1292,8 +1288,8 @@ void glVertexArrayAttribIFormat(GLuint vaobj, GLuint attribindex, GLint size, GL
 	LOG_D("[DSA] glVertexArrayAttribIFormat, vaobj: %u, attribindex: %u, size: %d, type: 0x%X, relativeoffset: %u", vaobj, attribindex, size, type, relativeoffset);
 	
 	if (vaobj == 0 || attribindex >= GL_MAX_VERTEX_ATTRIBS || size <= 0 || (type != GL_INT && type != GL_UNSIGNED_INT)) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayAttribIFormat");
-		return;
+		LOG_W("[DSA] Invalid parameters for glVertexArrayAttribIFormat");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glVertexAttribIFormat(attribindex, size, type, relativeoffset);
@@ -1308,8 +1304,8 @@ void glVertexArrayAttribLFormat(GLuint vaobj, GLuint attribindex, GLint size, GL
 	LOG_D("[DSA] glVertexArrayAttribLFormat, vaobj: %u, attribindex: %u, size: %d, type: 0x%X, relativeoffset: %u", vaobj, attribindex, size, type, relativeoffset);
 	
 	if (vaobj == 0 || attribindex >= GL_MAX_VERTEX_ATTRIBS || size <= 0 || type != GL_DOUBLE) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayAttribLFormat");
-		return;
+		LOG_W("[DSA] Invalid parameters for glVertexArrayAttribLFormat");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glVertexAttribLFormat(attribindex, size, type, relativeoffset);
@@ -1324,8 +1320,8 @@ void glVertexArrayAttribBinding(GLuint vaobj, GLuint attribindex, GLuint binding
 	LOG_D("[DSA] glVertexArrayAttribBinding, vaobj: %u, attribindex: %u, bindingindex: %u", vaobj, attribindex, bindingindex);
 	
 	if (vaobj == 0 || attribindex >= GL_MAX_VERTEX_ATTRIBS || bindingindex >= GL_MAX_VERTEX_ATTRIB_BINDINGS) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayAttribBinding");
-		return;
+		LOG_W("[DSA] Invalid parameters for glVertexArrayAttribBinding");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glVertexAttribBinding(attribindex, bindingindex);
@@ -1340,8 +1336,8 @@ void glVertexArrayBindingDivisor(GLuint vaobj, GLuint bindingindex, GLuint divis
 	LOG_D("[DSA] glVertexArrayBindingDivisor, vaobj: %u, bindingindex: %u, divisor: %u", vaobj, bindingindex, divisor);
 	
 	if (vaobj == 0 || bindingindex >= GL_MAX_VERTEX_ATTRIB_BINDINGS) {
-		LOG_E("[DSA] Invalid parameters for glVertexArrayBindingDivisor");
-		return;
+		LOG_W("[DSA] Invalid parameters for glVertexArrayBindingDivisor");
+		// return;
 	}
 	temporarilyBindVertexArray(vaobj);
 	glVertexBindingDivisor(bindingindex, divisor);
@@ -1356,13 +1352,13 @@ void glGetVertexArrayiv(GLuint vaobj, GLenum pname, GLint* param) {
 		LOG_D("[DSA] glGetVertexArrayiv, vaobj: %u, pname: 0x%X, param: %p", vaobj, pname, param);
 
 	if (vaobj == 0 || !param) {
-		LOG_E("[DSA] Invalid parameters for glGetVertexArrayiv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetVertexArrayiv");
+		// return;
 	}
 
 	if (pname != GL_ELEMENT_ARRAY_BUFFER_BINDING) {
-		LOG_E("[DSA] Invalid pname 0x%X for glGetVertexArrayiv. Only GL_ELEMENT_ARRAY_BUFFER_BINDING is allowed.", pname);
-		return;
+		LOG_W("[DSA] Invalid pname 0x%X for glGetVertexArrayiv. Only GL_ELEMENT_ARRAY_BUFFER_BINDING is allowed.", pname);
+		// return;
 	}
 
 	temporarilyBindVertexArray(vaobj);
@@ -1378,8 +1374,8 @@ void glGetVertexArrayIndexediv(GLuint vaobj, GLuint index, GLenum pname, GLint* 
 		LOG_D("[DSA] glGetVertexArrayIndexediv, vaobj: %u, index: %u, pname: 0x%X, param: %p", vaobj, index, pname, param);
 
 	if (vaobj == 0 || index >= GL_MAX_VERTEX_ATTRIBS || !param) {
-		LOG_E("[DSA] Invalid parameters for glGetVertexArrayIndexediv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetVertexArrayIndexediv");
+		// return;
 	}
 
 	temporarilyBindVertexArray(vaobj);
@@ -1395,8 +1391,8 @@ void glGetVertexArrayIndexed64iv(GLuint vaobj, GLuint index, GLenum pname, GLint
 		LOG_D("[DSA] glGetVertexArrayIndexed64iv, vaobj: %u, index: %u, pname: 0x%X, param: %p", vaobj, index, pname, param);
 
 	if (vaobj == 0 || index >= GL_MAX_VERTEX_ATTRIBS || !param) {
-		LOG_E("[DSA] Invalid parameters for glGetVertexArrayIndexed64iv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetVertexArrayIndexed64iv");
+		// return;
 	}
 
 	temporarilyBindVertexArray(vaobj);
@@ -1413,14 +1409,14 @@ void glCreateSamplers(GLsizei n, GLuint* samplers) {
 	LOG_D("[DSA] glCreateSamplers, n: %d, samplers: %p", n, samplers);
 	
 	if (n <= 0 || !samplers) {
-		LOG_E("[DSA] Invalid parameters for glCreateSamplers");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateSamplers");
+		// return;
 	}
 	for (GLsizei i = 0; i < n; ++i) {
 		GLuint samplerID = 0;
 		glGenSamplers(1, &samplerID);
 		if (samplerID == 0) {
-			LOG_E("[DSA] Failed to create sampler at index %d", i);
+			LOG_W("[DSA] Failed to create sampler at index %d", i);
 			continue;
 		}
 
@@ -1442,14 +1438,14 @@ void glCreateProgramPipelines(GLsizei n, GLuint* pipelines) {
 	LOG_D("[DSA] glCreateProgramPipelines, n: %d, pipelines: %p", n, pipelines);
 	
 	if (n <= 0 || !pipelines) {
-		LOG_E("[DSA] Invalid parameters for glCreateProgramPipelines");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateProgramPipelines");
+		// return;
 	}
 	for (GLsizei i = 0; i < n; ++i) {
 		GLuint pipelineID = 0;
 		glGenProgramPipelines(1, &pipelineID);
 		if (pipelineID == 0) {
-			LOG_E("[DSA] Failed to create program pipeline at index %d", i);
+			LOG_W("[DSA] Failed to create program pipeline at index %d", i);
 			continue;
 		}
 
@@ -1469,7 +1465,7 @@ void glCreateProgramPipelines(GLsizei n, GLuint* pipelines) {
 void glCreateQueries(GLenum target, GLsizei n, GLuint* ids) {
 	LOG()
 	LOG_D("[DSA] glCreateQueries, target: 0x%X, n: %d, ids: %p", target, n, ids);
-	if (n <= 0 || !ids) return;
+	if (n <= 0 || !ids) // return;
 	glGenQueries(n, ids);
 }
 
@@ -1542,7 +1538,7 @@ static void pushXFB(GLuint xfb) {
 	glGetIntegerv(GL_TRANSFORM_FEEDBACK_BINDING, &prev);
 	if (xfb == prev) {
 		g_xfbBindingStack.push_back(-1);
-		return;
+		// return;
 	}
 	g_xfbBindingStack.push_back(prev);
 	glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, xfb);
@@ -1556,7 +1552,7 @@ static void popXFB() {
 	g_xfbBindingStack.pop_back();
 	if (prev == -1) {
 		LOG_D("[DSA] No previous XFB binding to restore");
-		return;
+		// return;
 	}
 	glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, (GLuint)prev);
 	CHECK_GL_ERROR;
@@ -1566,8 +1562,8 @@ GLAPI void glCreateTransformFeedbacks(GLsizei n, GLuint* ids) {
 	LOG();
 	LOG_D("[DSA] glCreateTransformFeedbacks, n=%d, ids=%p", n, ids);
 	if (n <= 0 || !ids) {
-		LOG_E("[DSA] Invalid parameters for glCreateTransformFeedbacks");
-		return;
+		LOG_W("[DSA] Invalid parameters for glCreateTransformFeedbacks");
+		// return;
 	}
 	glGenTransformFeedbacks(n, ids);
 	CHECK_GL_ERROR;
@@ -1578,8 +1574,8 @@ GLAPI void glTransformFeedbackBufferBase(GLuint xfb, GLuint index, GLuint buffer
 	LOG();
 	LOG_D("[DSA] glTransformFeedbackBufferBase, xfb=%u, index=%u, buffer=%u", xfb, index, buffer);
 	if (xfb == 0 || index >= (GLuint)GL_MAX_TRANSFORM_FEEDBACK_BUFFERS || buffer == 0) {
-		LOG_E("[DSA] Invalid parameters for glTransformFeedbackBufferBase");
-		return;
+		LOG_W("[DSA] Invalid parameters for glTransformFeedbackBufferBase");
+		// return;
 	}
 	pushXFB(xfb);
 	glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, index, buffer);
@@ -1600,8 +1596,8 @@ GLAPI void glTransformFeedbackBufferRange(GLuint xfb, GLuint index,
 		buffer == 0 ||
 		offset < 0 || size <= 0)
 	{
-		LOG_E("[DSA] Invalid parameters for glTransformFeedbackBufferRange");
-		return;
+		LOG_W("[DSA] Invalid parameters for glTransformFeedbackBufferRange");
+		// return;
 	}
 	pushXFB(xfb);
 	glBindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, index, buffer, offset, size);
@@ -1615,8 +1611,8 @@ GLAPI void glGetTransformFeedbackiv(GLuint xfb, GLenum pname, GLint* param) {
 	LOG();
 	LOG_D("[DSA] glGetTransformFeedbackiv, xfb=%u, pname=0x%X, param=%p", xfb, pname, param);
 	if (xfb == 0 || !param) {
-		LOG_E("[DSA] Invalid parameters for glGetTransformFeedbackiv");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetTransformFeedbackiv");
+		// return;
 	}
 	pushXFB(xfb);
 	glGetTransformFeedbackiv(GL_TRANSFORM_FEEDBACK, pname, param);
@@ -1630,8 +1626,8 @@ GLAPI void glGetTransformFeedbacki_v(GLuint xfb, GLenum pname, GLuint index, GLi
 	LOG_D("[DSA] glGetTransformFeedbacki_v, xfb=%u, pname=0x%X, index=%u, param=%p",
 		xfb, pname, index, param);
 	if (xfb == 0 || index >= (GLuint)GL_MAX_TRANSFORM_FEEDBACK_BUFFERS || !param) {
-		LOG_E("[DSA] Invalid parameters for glGetTransformFeedbacki_v");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetTransformFeedbacki_v");
+		// return;
 	}
 	pushXFB(xfb);
 	glGetTransformFeedbacki_v(GL_TRANSFORM_FEEDBACK, pname, index, param);
@@ -1645,8 +1641,8 @@ GLAPI void glGetTransformFeedbacki64_v(GLuint xfb, GLenum pname, GLuint index, G
 	LOG_D("[DSA] glGetTransformFeedbacki64_v, xfb=%u, pname=0x%X, index=%u, param=%p",
 		xfb, pname, index, param);
 	if (xfb == 0 || index >= (GLuint)GL_MAX_TRANSFORM_FEEDBACK_BUFFERS || !param) {
-		LOG_E("[DSA] Invalid parameters for glGetTransformFeedbacki64_v");
-		return;
+		LOG_W("[DSA] Invalid parameters for glGetTransformFeedbacki64_v");
+		// return;
 	}
 	pushXFB(xfb);
 	glGetTransformFeedbacki64_v(GL_TRANSFORM_FEEDBACK, pname, index, param);

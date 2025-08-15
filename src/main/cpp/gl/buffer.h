@@ -4,26 +4,26 @@
 
 #ifndef MOBILEGLUES_BUFFER_H
 #define GL_GLEXT_PROTOTYPES
+#include "../config/settings.h"
+#include "../gles/loader.h"
 #include "../includes.h"
-#include "../../config/settings.h"
-#include <GL/gl.h>
 #include "glcorearb.h"
 #include "log.h"
-#include "../gles/loader.h"
 #include "mg.h"
+#include <GL/gl.h>
 
 #include <vector>
 
 typedef struct {
-    GLenum target;
-    GLuint buffer_id;
-    void *mapped_ptr;
+  GLenum target;
+  GLuint buffer_id;
+  void *mapped_ptr;
 #if GLOBAL_DEBUG || DEBUG
-    void *client_ptr;
+  void *client_ptr;
 #endif
-    GLsizeiptr size;
-    GLbitfield flags;
-    GLboolean is_dirty;
+  GLsizeiptr size;
+  GLbitfield flags;
+  GLboolean is_dirty;
 } BufferMapping;
 
 #ifdef __cplusplus
@@ -64,27 +64,38 @@ GLAPI GLAPIENTRY GLboolean glIsBuffer(GLuint buffer);
 
 GLAPI GLAPIENTRY void glBindBuffer(GLenum target, GLuint buffer);
 
-GLAPI GLAPIENTRY void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size);
+GLAPI GLAPIENTRY void glBindBufferRange(GLenum target, GLuint index,
+                                        GLuint buffer, GLintptr offset,
+                                        GLsizeiptr size);
 
-GLAPI GLAPIENTRY void glBindBufferBase(GLenum target, GLuint index, GLuint buffer);
+GLAPI GLAPIENTRY void glBindBufferBase(GLenum target, GLuint index,
+                                       GLuint buffer);
 
-GLAPI GLAPIENTRY void glBindVertexBuffer(GLuint bindingindex, GLuint buffer, GLintptr offset, GLsizei stride);
+GLAPI GLAPIENTRY void glBindVertexBuffer(GLuint bindingindex, GLuint buffer,
+                                         GLintptr offset, GLsizei stride);
 
-GLAPI GLAPIENTRY void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer);
+GLAPI GLAPIENTRY void glTexBuffer(GLenum target, GLenum internalformat,
+                                  GLuint buffer);
 
-GLAPI GLAPIENTRY void glTexBufferRange(GLenum target, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size);
+GLAPI GLAPIENTRY void glTexBufferRange(GLenum target, GLenum internalformat,
+                                       GLuint buffer, GLintptr offset,
+                                       GLsizeiptr size);
 
 GLAPI GLAPIENTRY GLboolean glUnmapBuffer(GLenum target);
 
 GLAPI GLAPIENTRY void *glMapBuffer(GLenum target, GLenum access);
 
-GLAPI GLAPIENTRY void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access);
+GLAPI GLAPIENTRY void *glMapBufferRange(GLenum target, GLintptr offset,
+                                        GLsizeiptr length, GLbitfield access);
 
-GLAPI GLAPIENTRY void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+GLAPI GLAPIENTRY void glBufferData(GLenum target, GLsizeiptr size,
+                                   const void *data, GLenum usage);
 
-GLAPI GLAPIENTRY void glBufferStorage(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags);
+GLAPI GLAPIENTRY void glBufferStorage(GLenum target, GLsizeiptr size,
+                                      const void *data, GLbitfield flags);
 
-GLAPI GLAPIENTRY void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length);
+GLAPI GLAPIENTRY void glFlushMappedBufferRange(GLenum target, GLintptr offset,
+                                               GLsizeiptr length);
 
 GLAPI GLAPIENTRY void glGenVertexArrays(GLsizei n, GLuint *arrays);
 
@@ -100,4 +111,4 @@ GLAPI GLAPIENTRY void glBindVertexArray(GLuint array);
 
 #define MOBILEGLUES_BUFFER_H
 
-#endif //MOBILEGLUES_BUFFER_H
+#endif // MOBILEGLUES_BUFFER_H
