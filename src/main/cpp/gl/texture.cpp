@@ -188,18 +188,21 @@ private:
   std::array<TextureBindingSlot, (int)TextureTarget::TEXTURES_COUNT> m_slots;
 };
 
-static ankerl::unordered_dense::map<GLuint, std::shared_ptr<TextureObject>>
-    BufferObjectsIDMap;
+static ankerl::unordered_dense::map<GLuint, std::shared_ptr<TextureObject>> BufferObjectsIDMap;
 static std::array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> TextureUnits;
 static int CurrentTextureUnitIndex = 0;
 
+void InitTextureMap(size_t expectedSize) {
+    BufferObjectsIDMap.reserve(expectedSize);
+}
+
 std::shared_ptr<TextureObject> GetOrCreateTextureObject(GLuint index) {
-  if (BufferObjectsIDMap.find(index) == BufferObjectsIDMap.end()) {
-    auto textureObject = std::make_shared<TextureObject>();
-    textureObject->texture = index;
-    BufferObjectsIDMap[index] = textureObject;
-  }
-  return BufferObjectsIDMap[index];
+    auto [iter, inserted] = BufferObjectsIDMap.try_emplace(index, nullptr);
+    if (inserted) {
+        iter->second = std::make_shared<TextureObject>();
+        iter->second->texture = index;
+    }
+    return iter->second;
 }
 
 void ActivateTextureUnit(int unit) {

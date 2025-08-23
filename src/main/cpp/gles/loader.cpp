@@ -15,6 +15,7 @@
 #include "../gl/buffer.h"
 #include "../gl/getter.h"
 #include "../config/settings.h"
+#include "../gl/texture.h"
 
 #define DEBUG 0
 
@@ -101,6 +102,8 @@ void init_gl_state() {
     set_gl_state_proxy_height(0);
     set_gl_state_proxy_width(0);
     set_gl_state_proxy_intformat(0);
+
+    InitTextureMap(1024);
 }
 
 void LogOpenGLExtensions() {

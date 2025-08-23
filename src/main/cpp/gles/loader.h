@@ -129,7 +129,7 @@ extern "C"
 
 #define STUB_FUNCTION_END(type, name, ...)                                                                             \
     LOG_W("Stub function: %s @ %s(...)", RENDERERNAME, __FUNCTION__);                                                  \
-    return (type)0;                                                                                                    \
+    return (type)1;                                                                                                    \
     }
 
 #define STUB_FUNCTION_END_NO_RETURN(type, name, ...)                                                                   \

@@ -131,9 +131,70 @@ void glClear(GLbitfield mask) {
     CHECK_GL_ERROR;
 }
 
-
-
 void glHint(GLenum target, GLenum mode) {
     LOG()
     LOG_D("glHint, target = %s, mode = %s", glEnumToString(target), glEnumToString(mode))
+}
+
+typedef struct FakeSync {
+    int id;
+} FakeSync;
+
+static int g_fake_sync_counter = 1;
+
+GLsync glFenceSync(GLenum condition, GLbitfield flags) {
+    (void)condition;
+    (void)flags;
+
+    auto* sync = (FakeSync*)malloc(sizeof(FakeSync));
+    if (!sync) return nullptr;
+    sync->id = g_fake_sync_counter++;
+    return (GLsync)sync;
+}
+
+GLboolean glIsSync(GLsync sync) {
+    return (sync != nullptr) ? GL_TRUE : GL_FALSE;
+}
+
+void glDeleteSync(GLsync sync) {
+    if (sync) {
+        free(sync);
+    }
+}
+
+GLenum glClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+    (void)sync;
+    (void)flags;
+    (void)timeout;
+    return GL_ALREADY_SIGNALED;
+}
+
+void glWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+    (void)sync;
+    (void)flags;
+    (void)timeout;
+}
+
+void glGetSynciv(GLsync sync, GLenum pname, GLsizei bufSize,
+                 GLsizei* length, GLint* values) {
+    if (!values) return;
+
+    switch (pname) {
+        case GL_OBJECT_TYPE:
+            *values = GL_SYNC_FENCE;
+            break;
+        case GL_SYNC_STATUS:
+            *values = GL_SIGNALED;
+            break;
+        case GL_SYNC_CONDITION:
+            *values = GL_SYNC_GPU_COMMANDS_COMPLETE;
+            break;
+        case GL_SYNC_FLAGS:
+            *values = 0;
+            break;
+        default:
+            *values = 0;
+            break;
+    }
+    if (length) *length = 1;
 }
