@@ -23,8 +23,8 @@ void init_settings() {
     global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
     global_settings.angle_depth_clear_fix_mode = AngleDepthClearFixMode::Disabled;
     global_settings.ext_direct_state_access = true;
-    global_settings.custom_gl_version = { 0, 0, 0 }; // will go default
-	global_settings.fsr1_setting = FSR1_Quality_Preset::Disabled;
+    global_settings.custom_gl_version = {0, 0, 0}; // will go default
+    global_settings.fsr1_setting = FSR1_Quality_Preset::Disabled;
 
 #else
 
@@ -36,16 +36,20 @@ void init_settings() {
         }
     }
 
-    AngleConfig angleConfig = success ? static_cast<AngleConfig>(config_get_int("enableANGLE")) : AngleConfig::DisableIfPossible;
-    NoErrorConfig noErrorConfig = success ? static_cast<NoErrorConfig>(config_get_int("enableNoError")) : NoErrorConfig::Auto;
+    AngleConfig angleConfig =
+        success ? static_cast<AngleConfig>(config_get_int("enableANGLE")) : AngleConfig::DisableIfPossible;
+    NoErrorConfig noErrorConfig =
+        success ? static_cast<NoErrorConfig>(config_get_int("enableNoError")) : NoErrorConfig::Auto;
     bool enableExtGL43 = success ? (config_get_int("enableExtGL43") > 0) : false;
     bool enableExtComputeShader = success ? (config_get_int("enableExtComputeShader") > 0) : false;
     bool enableExtTimerQuery = success ? (config_get_int("enableExtTimerQuery") > 0) : false;
     bool enableExtDirectStateAccess = success ? (config_get_int("enableExtDirectStateAccess") > 0) : false;
-    multidraw_mode_t multidrawMode = success ? static_cast<multidraw_mode_t>(config_get_int("multidrawMode")) : multidraw_mode_t::Auto;
-    AngleDepthClearFixMode angleDepthClearFixMode = success ? static_cast<AngleDepthClearFixMode>(config_get_int("angleDepthClearFixMode")) : AngleDepthClearFixMode::Disabled;
+    AngleDepthClearFixMode angleDepthClearFixMode =
+        success ? static_cast<AngleDepthClearFixMode>(config_get_int("angleDepthClearFixMode"))
+                : AngleDepthClearFixMode::Disabled;
     int customGLVersionInt = success ? config_get_int("customGLVersion") : DEFAULT_GL_VERSION;
-	FSR1_Quality_Preset fsr1Setting = success ? static_cast<FSR1_Quality_Preset>(config_get_int("fsr1Setting")) : FSR1_Quality_Preset::Disabled;
+    FSR1_Quality_Preset fsr1Setting =
+        success ? static_cast<FSR1_Quality_Preset>(config_get_int("fsr1Setting")) : FSR1_Quality_Preset::Disabled;
 
     if (customGLVersionInt < 0) {
         customGLVersionInt = 0;
@@ -62,10 +66,8 @@ void init_settings() {
     if (static_cast<int>(noErrorConfig) < 0 || static_cast<int>(noErrorConfig) > 3) {
         noErrorConfig = NoErrorConfig::Auto;
     }
-    if (static_cast<int>(multidrawMode) < 0 || static_cast<int>(multidrawMode) >= static_cast<int>(multidraw_mode_t::MaxValue)) {
-        multidrawMode = multidraw_mode_t::Auto;
-    }
-    if (static_cast<int>(angleDepthClearFixMode) < 0 || static_cast<int>(angleDepthClearFixMode) >= static_cast<int>(AngleDepthClearFixMode::MaxValue)) {
+    if (static_cast<int>(angleDepthClearFixMode) < 0 ||
+        static_cast<int>(angleDepthClearFixMode) >= static_cast<int>(AngleDepthClearFixMode::MaxValue)) {
         angleDepthClearFixMode = AngleDepthClearFixMode::Disabled;
     }
     if (customGLVersionInt > 46) {
@@ -75,11 +77,12 @@ void init_settings() {
     } else if (customGLVersionInt > 33 && customGLVersionInt < 40) {
         customGLVersionInt = 33;
     } else if (customGLVersionInt == 0) {
-        customGLVersionInt = DEFAULT_GL_VERSION; 
-	}
-    if (static_cast<int>(fsr1Setting) < 0 || static_cast<int>(fsr1Setting) >= static_cast<int>(FSR1_Quality_Preset::MaxValue)) {
+        customGLVersionInt = DEFAULT_GL_VERSION;
+    }
+    if (static_cast<int>(fsr1Setting) < 0 ||
+        static_cast<int>(fsr1Setting) >= static_cast<int>(FSR1_Quality_Preset::MaxValue)) {
         fsr1Setting = FSR1_Quality_Preset::Disabled;
-	}
+    }
 
     Version customGLVersion(customGLVersionInt);
 
@@ -102,8 +105,7 @@ void init_settings() {
         enableExtDirectStateAccess = true;
         maxGlslCacheSize = 0;
         angleDepthClearFixMode = AngleDepthClearFixMode::Disabled;
-		fsr1Setting = FSR1_Quality_Preset::Disabled;
-		multidrawMode = multidraw_mode_t::DrawElements;
+        fsr1Setting = FSR1_Quality_Preset::Disabled;
     }
 
     AngleMode finalAngleMode = AngleMode::Disabled;
@@ -150,11 +152,11 @@ void init_settings() {
 
     global_settings.angle = finalAngleMode;
     LOG_D("Final ANGLE setting: %d", static_cast<int>(global_settings.angle))
-        global_settings.buffer_coherent_as_flush = (global_settings.angle == AngleMode::Disabled);
+    global_settings.buffer_coherent_as_flush = (global_settings.angle == AngleMode::Disabled);
 
     if (global_settings.angle == AngleMode::Enabled) {
-        //setenv("LIBGL_GLES", "libGLESv2_angle.so", 1);
-        //setenv("LIBGL_EGL", "libEGL_angle.so", 1);
+        // setenv("LIBGL_GLES", "libGLESv2_angle.so", 1);
+        // setenv("LIBGL_EGL", "libEGL_angle.so", 1);
     }
 
     switch (noErrorConfig) {
@@ -181,118 +183,138 @@ void init_settings() {
     global_settings.ext_timer_query = enableExtTimerQuery;
     global_settings.ext_direct_state_access = enableExtDirectStateAccess;
     global_settings.max_glsl_cache_size = maxGlslCacheSize;
-    global_settings.multidraw_mode = multidrawMode;
     global_settings.angle_depth_clear_fix_mode = angleDepthClearFixMode;
     global_settings.custom_gl_version = customGLVersion;
-	global_settings.fsr1_setting = fsr1Setting;
+    global_settings.fsr1_setting = fsr1Setting;
 #endif
 
+    LOG_V("[MobileGlues] Setting: enableAngle                 = %s",
+          global_settings.angle == AngleMode::Enabled ? "true" : "false")
+    LOG_V("[MobileGlues] Setting: ignoreError                 = %i", static_cast<int>(global_settings.ignore_error))
+    LOG_V("[MobileGlues] Setting: enableExtComputeShader      = %s",
+          global_settings.ext_compute_shader ? "true" : "false")
+    LOG_V("[MobileGlues] Setting: enableExtGL43               = %s", global_settings.ext_gl43 ? "true" : "false")
+    LOG_V("[MobileGlues] Setting: enableExtTimerQuery         = %s", global_settings.ext_timer_query ? "true" : "false")
+    LOG_V("[MobileGlues] Setting: enableExtDirectStateAccess  = %s",
+          global_settings.ext_direct_state_access ? "true" : "false")
+    LOG_V("[MobileGlues] Setting: maxGlslCacheSize            = %i",
+          static_cast<int>(global_settings.max_glsl_cache_size / 1024 / 1024))
+    LOG_V("[MobileGlues] Setting: angleDepthClearFixMode      = %i",
+          static_cast<int>(global_settings.angle_depth_clear_fix_mode))
+    LOG_V("[MobileGlues] Setting: bufferCoherentAsFlush       = %i",
+          static_cast<int>(global_settings.buffer_coherent_as_flush))
+    if (global_settings.custom_gl_version.isEmpty()) {
+        LOG_V("[MobileGlues] Setting: customGLVersion             = (default)");
+    } else {
+        LOG_V("[MobileGlues] Setting: customGLVersion             = %s",
+              global_settings.custom_gl_version.toString().c_str());
+    }
+    LOG_V("[MobileGlues] Setting: fsr1Setting                 = %i", static_cast<int>(global_settings.fsr1_setting))
+
+    GLVersion =
+        global_settings.custom_gl_version.isEmpty() ? Version(DEFAULT_GL_VERSION) : global_settings.custom_gl_version;
+}
+
+void set_multidraw_setting() { // should be called after init_gles_target()
+    multidraw_mode_t multidrawMode = static_cast<multidraw_mode_t>(config_get_int("multidrawMode"));
+    if (static_cast<int>(multidrawMode) == -1) {
+        multidrawMode = multidraw_mode_t::Auto;
+    }
+    if (static_cast<int>(multidrawMode) < 0 ||
+        static_cast<int>(multidrawMode) >= static_cast<int>(multidraw_mode_t::MaxValue)) {
+        multidrawMode = multidraw_mode_t::Auto;
+    }
+    global_settings.multidraw_mode = multidrawMode;
     std::string draw_mode_str;
     switch (global_settings.multidraw_mode) {
-    case multidraw_mode_t::PreferIndirect: draw_mode_str = "Indirect"; break;
-    case multidraw_mode_t::PreferBaseVertex: draw_mode_str = "Unroll"; break;
-    case multidraw_mode_t::PreferMultidrawIndirect: draw_mode_str = "Multidraw indirect"; break;
-    case multidraw_mode_t::DrawElements: draw_mode_str = "DrawElements"; break;
-    case multidraw_mode_t::Compute: draw_mode_str = "Compute"; break;
-    case multidraw_mode_t::Auto: draw_mode_str = "Auto"; break;
+    case multidraw_mode_t::PreferIndirect:
+        draw_mode_str = "Indirect";
+        break;
+    case multidraw_mode_t::PreferBaseVertex:
+        draw_mode_str = "Unroll";
+        break;
+    case multidraw_mode_t::PreferMultidrawIndirect:
+        draw_mode_str = "Multidraw indirect";
+        break;
+    case multidraw_mode_t::DrawElements:
+        draw_mode_str = "DrawElements";
+        break;
+    case multidraw_mode_t::Compute:
+        draw_mode_str = "Compute";
+        break;
+    case multidraw_mode_t::Auto:
+        draw_mode_str = "Auto";
+        break;
     default:
         draw_mode_str = "(Unknown)";
         global_settings.multidraw_mode = multidraw_mode_t::Auto;
         break;
     }
-
-    LOG_V("[MobileGlues] Setting: enableAngle                 = %s",
-    global_settings.angle == AngleMode::Enabled ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: ignoreError                 = %i",
-        static_cast<int>(global_settings.ignore_error))
-    LOG_V("[MobileGlues] Setting: enableExtComputeShader      = %s",
-        global_settings.ext_compute_shader ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: enableExtGL43               = %s",
-        global_settings.ext_gl43 ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: enableExtTimerQuery         = %s",
-        global_settings.ext_timer_query ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: enableExtDirectStateAccess  = %s",
-        global_settings.ext_direct_state_access ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: maxGlslCacheSize            = %i",
-        static_cast<int>(global_settings.max_glsl_cache_size / 1024 / 1024))
     LOG_V("[MobileGlues] Setting: multidrawMode               = %s", draw_mode_str.c_str())
-    LOG_V("[MobileGlues] Setting: angleDepthClearFixMode      = %i", static_cast<int>(global_settings.angle_depth_clear_fix_mode))
-    LOG_V("[MobileGlues] Setting: bufferCoherentAsFlush       = %i", static_cast<int>(global_settings.buffer_coherent_as_flush))
-    if (global_settings.custom_gl_version.isEmpty()) {
-        LOG_V("[MobileGlues] Setting: customGLVersion             = (default)");
-    } else {
-        LOG_V("[MobileGlues] Setting: customGLVersion             = %s",
-            global_settings.custom_gl_version.toString().c_str());
-    }
-	LOG_V("[MobileGlues] Setting: fsr1Setting                 = %i", static_cast<int>(global_settings.fsr1_setting))
-
-	GLVersion = global_settings.custom_gl_version.isEmpty() ? Version(DEFAULT_GL_VERSION) : global_settings.custom_gl_version;
 }
 
 void init_settings_post() {
     bool multidraw = g_gles_caps.GL_EXT_multi_draw_indirect;
-    bool basevertex = g_gles_caps.GL_OES_draw_elements_base_vertex ||
-                     (g_gles_caps.major == 3 && g_gles_caps.minor >= 2) || 
-                     (g_gles_caps.major > 3);
-    bool indirect = (g_gles_caps.major == 3 && g_gles_caps.minor >= 1) || 
-                    (g_gles_caps.major > 3);
+    bool basevertex = g_gles_caps.GL_EXT_draw_elements_base_vertex || g_gles_caps.GL_OES_draw_elements_base_vertex ||
+                      (g_gles_caps.major == 3 && g_gles_caps.minor >= 2) || (g_gles_caps.major > 3);
+    bool indirect = (g_gles_caps.major == 3 && g_gles_caps.minor >= 1) || (g_gles_caps.major > 3);
 
     switch (global_settings.multidraw_mode) {
-        case multidraw_mode_t::PreferIndirect:
-            LOG_V("multidrawMode = PreferIndirect")
-            if (indirect) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferIndirect;
-                LOG_V("    -> Indirect (OK)")
-            } else if (basevertex) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferBaseVertex;
-                LOG_V("    -> BaseVertex (Preferred not supported, falling back)")
-            } else {
-                global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
-                LOG_V("    -> DrawElements (Preferred not supported, falling back)")
-            }
-            break;
-        case multidraw_mode_t::PreferBaseVertex:
-            LOG_V("multidrawMode = PreferBaseVertex")
-            if (basevertex) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferBaseVertex;
-                LOG_V("    -> BaseVertex (OK)")
-            } else if (multidraw) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferMultidrawIndirect;
-                LOG_V("    -> MultidrawIndirect (Preferred not supported, falling back)")
-            } else if (indirect) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferIndirect;
-                LOG_V("    -> Indirect (Preferred not supported, falling back)")
-            } else {
-                global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
-                LOG_V("    -> DrawElements (Preferred not supported, falling back)")
-            }
-            break;
-        case multidraw_mode_t::DrawElements:
-            LOG_V("multidrawMode = DrawElements")
+    case multidraw_mode_t::PreferIndirect:
+        LOG_V("multidrawMode = PreferIndirect")
+        if (indirect) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferIndirect;
+            LOG_V("    -> Indirect (OK)")
+        } else if (basevertex) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferBaseVertex;
+            LOG_V("    -> BaseVertex (Preferred not supported, falling back)")
+        } else {
             global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
-            LOG_V("    -> DrawElements (OK)")
-            break;
-        case multidraw_mode_t::Compute:
-            LOG_V("multidrawMode = Compute")
-            global_settings.multidraw_mode = multidraw_mode_t::Compute;
-            LOG_V("    -> Compute (OK)")
-            break;
-        case multidraw_mode_t::Auto:
-        default:
-            LOG_V("multidrawMode = Auto")
-            if (multidraw) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferMultidrawIndirect;
-                LOG_V("    -> MultidrawIndirect (Auto detected)")
-            } else if (indirect) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferIndirect;
-                LOG_V("    -> Indirect (Auto detected)")
-            } else if (basevertex) {
-                global_settings.multidraw_mode = multidraw_mode_t::PreferBaseVertex;
-                LOG_V("    -> BaseVertex (Auto detected)")
-            } else {
-                global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
-                LOG_V("    -> DrawElements (Auto detected)")
-            }
-            break;
+            LOG_V("    -> DrawElements (Preferred not supported, falling back)")
+        }
+        break;
+    case multidraw_mode_t::PreferBaseVertex:
+        LOG_V("multidrawMode = PreferBaseVertex")
+        if (basevertex) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferBaseVertex;
+            LOG_V("    -> BaseVertex (OK)")
+        } else if (multidraw) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferMultidrawIndirect;
+            LOG_V("    -> MultidrawIndirect (Preferred not supported, falling back)")
+        } else if (indirect) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferIndirect;
+            LOG_V("    -> Indirect (Preferred not supported, falling back)")
+        } else {
+            global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
+            LOG_V("    -> DrawElements (Preferred not supported, falling back)")
+        }
+        break;
+    case multidraw_mode_t::DrawElements:
+        LOG_V("multidrawMode = DrawElements")
+        global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
+        LOG_V("    -> DrawElements (OK)")
+        break;
+    case multidraw_mode_t::Compute:
+        LOG_V("multidrawMode = Compute")
+        global_settings.multidraw_mode = multidraw_mode_t::Compute;
+        LOG_V("    -> Compute (OK)")
+        break;
+    case multidraw_mode_t::Auto:
+    default:
+        LOG_V("multidrawMode = Auto")
+        if (multidraw) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferMultidrawIndirect;
+            LOG_V("    -> MultidrawIndirect (Auto detected)")
+        } else if (indirect) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferIndirect;
+            LOG_V("    -> Indirect (Auto detected)")
+        } else if (basevertex) {
+            global_settings.multidraw_mode = multidraw_mode_t::PreferBaseVertex;
+            LOG_V("    -> BaseVertex (Auto detected)")
+        } else {
+            global_settings.multidraw_mode = multidraw_mode_t::DrawElements;
+            LOG_V("    -> DrawElements (Auto detected)")
+        }
+        break;
     }
 }

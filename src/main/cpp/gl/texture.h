@@ -130,8 +130,8 @@ public:
   GLsizei depth;
 };
 
-std::shared_ptr<TextureObject> mgGetTexObjectByTarget(GLenum target);
-std::shared_ptr<TextureObject> mgGetTexObjectByID(unsigned texture);
+TextureObject* mgGetTexObjectByTarget(GLenum target);
+TextureObject* mgGetTexObjectByID(unsigned texture);
 void InitTextureMap(size_t expectedSize);
 
 #endif
