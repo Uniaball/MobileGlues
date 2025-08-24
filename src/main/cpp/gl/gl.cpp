@@ -123,10 +123,8 @@ void glClear(GLbitfield mask) {
             GLES.glClearBufferfv(GL_DEPTH, 0, &clear_depth_value);
         }
         // Clear again
-        GLES.glClear(mask);
-    } else {
-        GLES.glClear(mask);
     }
+    GLES.glClear(mask);
 
     CHECK_GL_ERROR;
 }
@@ -142,40 +140,39 @@ typedef struct FakeSync {
 
 static int g_fake_sync_counter = 1;
 
-GLsync glFenceSync(GLenum condition, GLbitfield flags) {
+GLAPI GLAPIENTRY GLsync glFenceSync(GLenum condition, GLbitfield flags) {
     (void)condition;
     (void)flags;
-
     auto* sync = (FakeSync*)malloc(sizeof(FakeSync));
     if (!sync) return nullptr;
     sync->id = g_fake_sync_counter++;
     return (GLsync)sync;
 }
 
-GLboolean glIsSync(GLsync sync) {
+GLAPI GLAPIENTRY GLboolean glIsSync(GLsync sync) {
     return (sync != nullptr) ? GL_TRUE : GL_FALSE;
 }
 
-void glDeleteSync(GLsync sync) {
+GLAPI GLAPIENTRY void glDeleteSync(GLsync sync) {
     if (sync) {
         free(sync);
     }
 }
 
-GLenum glClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+GLAPI GLAPIENTRY GLenum glClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
     (void)sync;
     (void)flags;
     (void)timeout;
     return GL_ALREADY_SIGNALED;
 }
 
-void glWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+GLAPI GLAPIENTRY void glWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
     (void)sync;
     (void)flags;
     (void)timeout;
 }
 
-void glGetSynciv(GLsync sync, GLenum pname, GLsizei bufSize,
+GLAPI GLAPIENTRY void glGetSynciv(GLsync sync, GLenum pname, GLsizei bufSize,
                  GLsizei* length, GLint* values) {
     if (!values) return;
 

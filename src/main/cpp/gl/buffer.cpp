@@ -5,6 +5,7 @@
 #include "buffer.h"
 #include "ankerl/unordered_dense.h"
 #include "texture.h"
+#include <cstring>
 
 template <typename K, typename V>
 using unordered_map = ankerl::unordered_dense::map<K, V>;
@@ -44,6 +45,18 @@ enum BindingIndex : int {
     BINDING_COUNT
 };
 static std::array<GLuint, BINDING_COUNT> g_bound_buffers_arr = {0};
+
+struct BufferMapping {
+    bool isMapped = false;
+    GLbitfield access = 0;
+    GLintptr offset = 0;
+    GLsizeiptr length = 0;
+    void* shadowBuffer = nullptr;
+    bool isDirty = false;
+    bool persistent = false;
+};
+
+static unordered_map<GLuint, BufferMapping> g_buffer_mapping;
 
 static inline int ensure_buffer_capacity(GLuint id) {
     if ((int)g_gen_buffers.size() <= (int)id) {
@@ -99,6 +112,14 @@ void remove_buffer(GLuint key) {
         g_gen_buffers[key] = 0;
         if (key < g_buffer_datasize.size()) g_buffer_datasize[key] = 0;
         g_free_buffer_ids.push_back(key);
+
+        auto it = g_buffer_mapping.find(key);
+        if (it != g_buffer_mapping.end()) {
+            if (it->second.shadowBuffer) {
+                free(it->second.shadowBuffer);
+            }
+            g_buffer_mapping.erase(it);
+        }
     }
 }
 
@@ -133,32 +154,32 @@ size_t get_buffer_data_size(GLuint buffer) {
 
 static inline int binding_target_to_index(GLenum target) {
     switch (target) {
-    case GL_ARRAY_BUFFER:
-        return BI_ARRAY_BUFFER;
-    case GL_ATOMIC_COUNTER_BUFFER:
-        return BI_ATOMIC_COUNTER;
-    case GL_COPY_READ_BUFFER:
-        return BI_COPY_READ;
-    case GL_COPY_WRITE_BUFFER:
-        return BI_COPY_WRITE;
-    case GL_DRAW_INDIRECT_BUFFER:
-        return BI_DRAW_INDIRECT;
-    case GL_DISPATCH_INDIRECT_BUFFER:
-        return BI_DISPATCH_INDIRECT;
-    case GL_ELEMENT_ARRAY_BUFFER:
-        return BI_ELEMENT_ARRAY;
-    case GL_PIXEL_PACK_BUFFER:
-        return BI_PIXEL_PACK;
-    case GL_PIXEL_UNPACK_BUFFER:
-        return BI_PIXEL_UNPACK;
-    case GL_SHADER_STORAGE_BUFFER:
-        return BI_SHADER_STORAGE;
-    case GL_TRANSFORM_FEEDBACK_BUFFER:
-        return BI_TRANSFORM_FEEDBACK;
-    case GL_UNIFORM_BUFFER:
-        return BI_UNIFORM_BUFFER;
-    default:
-        return -1;
+        case GL_ARRAY_BUFFER:
+            return BI_ARRAY_BUFFER;
+        case GL_ATOMIC_COUNTER_BUFFER:
+            return BI_ATOMIC_COUNTER;
+        case GL_COPY_READ_BUFFER:
+            return BI_COPY_READ;
+        case GL_COPY_WRITE_BUFFER:
+            return BI_COPY_WRITE;
+        case GL_DRAW_INDIRECT_BUFFER:
+            return BI_DRAW_INDIRECT;
+        case GL_DISPATCH_INDIRECT_BUFFER:
+            return BI_DISPATCH_INDIRECT;
+        case GL_ELEMENT_ARRAY_BUFFER:
+            return BI_ELEMENT_ARRAY;
+        case GL_PIXEL_PACK_BUFFER:
+            return BI_PIXEL_PACK;
+        case GL_PIXEL_UNPACK_BUFFER:
+            return BI_PIXEL_UNPACK;
+        case GL_SHADER_STORAGE_BUFFER:
+            return BI_SHADER_STORAGE;
+        case GL_TRANSFORM_FEEDBACK_BUFFER:
+            return BI_TRANSFORM_FEEDBACK;
+        case GL_UNIFORM_BUFFER:
+            return BI_UNIFORM_BUFFER;
+        default:
+            return -1;
     }
 }
 
@@ -170,45 +191,45 @@ void set_bound_buffer_by_target(GLenum target, GLuint buffer) {
 GLuint find_bound_buffer(GLenum key) {
     GLenum target = 0;
     switch (key) {
-    case GL_ARRAY_BUFFER_BINDING:
-        target = GL_ARRAY_BUFFER;
-        break;
-    case GL_ATOMIC_COUNTER_BUFFER_BINDING:
-        target = GL_ATOMIC_COUNTER_BUFFER;
-        break;
-    case GL_COPY_READ_BUFFER_BINDING:
-        target = GL_COPY_READ_BUFFER;
-        break;
-    case GL_COPY_WRITE_BUFFER_BINDING:
-        target = GL_COPY_WRITE_BUFFER;
-        break;
-    case GL_DRAW_INDIRECT_BUFFER_BINDING:
-        target = GL_DRAW_INDIRECT_BUFFER;
-        break;
-    case GL_DISPATCH_INDIRECT_BUFFER_BINDING:
-        target = GL_DISPATCH_INDIRECT_BUFFER;
-        break;
-    case GL_ELEMENT_ARRAY_BUFFER_BINDING:
-        target = GL_ELEMENT_ARRAY_BUFFER;
-        break;
-    case GL_PIXEL_PACK_BUFFER_BINDING:
-        target = GL_PIXEL_PACK_BUFFER;
-        break;
-    case GL_PIXEL_UNPACK_BUFFER_BINDING:
-        target = GL_PIXEL_UNPACK_BUFFER;
-        break;
-    case GL_SHADER_STORAGE_BUFFER_BINDING:
-        target = GL_SHADER_STORAGE_BUFFER;
-        break;
-    case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
-        target = GL_TRANSFORM_FEEDBACK_BUFFER;
-        break;
-    case GL_UNIFORM_BUFFER_BINDING:
-        target = GL_UNIFORM_BUFFER;
-        break;
-    default:
-        target = 0;
-        break;
+        case GL_ARRAY_BUFFER_BINDING:
+            target = GL_ARRAY_BUFFER;
+            break;
+        case GL_ATOMIC_COUNTER_BUFFER_BINDING:
+            target = GL_ATOMIC_COUNTER_BUFFER;
+            break;
+        case GL_COPY_READ_BUFFER_BINDING:
+            target = GL_COPY_READ_BUFFER;
+            break;
+        case GL_COPY_WRITE_BUFFER_BINDING:
+            target = GL_COPY_WRITE_BUFFER;
+            break;
+        case GL_DRAW_INDIRECT_BUFFER_BINDING:
+            target = GL_DRAW_INDIRECT_BUFFER;
+            break;
+        case GL_DISPATCH_INDIRECT_BUFFER_BINDING:
+            target = GL_DISPATCH_INDIRECT_BUFFER;
+            break;
+        case GL_ELEMENT_ARRAY_BUFFER_BINDING:
+            target = GL_ELEMENT_ARRAY_BUFFER;
+            break;
+        case GL_PIXEL_PACK_BUFFER_BINDING:
+            target = GL_PIXEL_PACK_BUFFER;
+            break;
+        case GL_PIXEL_UNPACK_BUFFER_BINDING:
+            target = GL_PIXEL_UNPACK_BUFFER;
+            break;
+        case GL_SHADER_STORAGE_BUFFER_BINDING:
+            target = GL_SHADER_STORAGE_BUFFER;
+            break;
+        case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
+            target = GL_TRANSFORM_FEEDBACK_BUFFER;
+            break;
+        case GL_UNIFORM_BUFFER_BINDING:
+            target = GL_UNIFORM_BUFFER;
+            break;
+        default:
+            target = key;
+            break;
     }
     if (target == GL_ELEMENT_ARRAY_BUFFER) {
         return get_ibo_by_vao(find_bound_array());
@@ -264,32 +285,32 @@ GLuint find_real_array(GLuint key) {
 
 static GLenum get_binding_query(GLenum target) {
     switch (target) {
-    case GL_ARRAY_BUFFER:
-        return GL_ARRAY_BUFFER_BINDING;
-    case GL_ELEMENT_ARRAY_BUFFER:
-        return GL_ELEMENT_ARRAY_BUFFER_BINDING;
-    case GL_PIXEL_PACK_BUFFER:
-        return GL_PIXEL_PACK_BUFFER_BINDING;
-    case GL_PIXEL_UNPACK_BUFFER:
-        return GL_PIXEL_UNPACK_BUFFER_BINDING;
-    case GL_COPY_WRITE_BUFFER:
-        return GL_COPY_WRITE_BUFFER_BINDING;
-    case GL_COPY_READ_BUFFER:
-        return GL_COPY_READ_BUFFER_BINDING;
-    case GL_UNIFORM_BUFFER:
-        return GL_UNIFORM_BUFFER_BINDING;
-    case GL_SHADER_STORAGE_BUFFER:
-        return GL_SHADER_STORAGE_BUFFER_BINDING;
-    case GL_TRANSFORM_FEEDBACK_BUFFER:
-        return GL_TRANSFORM_FEEDBACK_BUFFER_BINDING;
-    case GL_ATOMIC_COUNTER_BUFFER:
-        return GL_ATOMIC_COUNTER_BUFFER_BINDING;
-    case GL_DRAW_INDIRECT_BUFFER:
-        return GL_DRAW_INDIRECT_BUFFER_BINDING;
-    case GL_DISPATCH_INDIRECT_BUFFER:
-        return GL_DISPATCH_INDIRECT_BUFFER_BINDING;
-    default:
-        return 0;
+        case GL_ARRAY_BUFFER:
+            return GL_ARRAY_BUFFER_BINDING;
+        case GL_ELEMENT_ARRAY_BUFFER:
+            return GL_ELEMENT_ARRAY_BUFFER_BINDING;
+        case GL_PIXEL_PACK_BUFFER:
+            return GL_PIXEL_PACK_BUFFER_BINDING;
+        case GL_PIXEL_UNPACK_BUFFER:
+            return GL_PIXEL_UNPACK_BUFFER_BINDING;
+        case GL_COPY_WRITE_BUFFER:
+            return GL_COPY_WRITE_BUFFER_BINDING;
+        case GL_COPY_READ_BUFFER:
+            return GL_COPY_READ_BUFFER_BINDING;
+        case GL_UNIFORM_BUFFER:
+            return GL_UNIFORM_BUFFER_BINDING;
+        case GL_SHADER_STORAGE_BUFFER:
+            return GL_SHADER_STORAGE_BUFFER_BINDING;
+        case GL_TRANSFORM_FEEDBACK_BUFFER:
+            return GL_TRANSFORM_FEEDBACK_BUFFER_BINDING;
+        case GL_ATOMIC_COUNTER_BUFFER:
+            return GL_ATOMIC_COUNTER_BUFFER_BINDING;
+        case GL_DRAW_INDIRECT_BUFFER:
+            return GL_DRAW_INDIRECT_BUFFER_BINDING;
+        case GL_DISPATCH_INDIRECT_BUFFER:
+            return GL_DISPATCH_INDIRECT_BUFFER_BINDING;
+        default:
+            return 0;
     }
 }
 
@@ -458,96 +479,96 @@ void glBindVertexBuffer(GLuint bindingindex, GLuint buffer, GLintptr offset, GLs
 
 size_t get_internal_format_size(GLenum internalformat) {
     switch (internalformat) {
-    case GL_R8:
-        return 1;
-    case GL_R8I:
-    case GL_R8UI:
-        return 1;
-    case GL_R16:
-        return 2;
-    case GL_R16I:
-    case GL_R16UI:
-    case GL_R16F:
-        return 2;
-    case GL_R32I:
-    case GL_R32UI:
-    case GL_R32F:
-        return 4;
+        case GL_R8:
+            return 1;
+        case GL_R8I:
+        case GL_R8UI:
+            return 1;
+        case GL_R16:
+            return 2;
+        case GL_R16I:
+        case GL_R16UI:
+        case GL_R16F:
+            return 2;
+        case GL_R32I:
+        case GL_R32UI:
+        case GL_R32F:
+            return 4;
 
-    case GL_RG8:
-        return 2;
-    case GL_RG8I:
-    case GL_RG8UI:
-        return 2;
-    case GL_RG16:
-        return 4;
-    case GL_RG16I:
-    case GL_RG16UI:
-    case GL_RG16F:
-        return 4;
-    case GL_RG32I:
-    case GL_RG32UI:
-    case GL_RG32F:
-        return 8;
+        case GL_RG8:
+            return 2;
+        case GL_RG8I:
+        case GL_RG8UI:
+            return 2;
+        case GL_RG16:
+            return 4;
+        case GL_RG16I:
+        case GL_RG16UI:
+        case GL_RG16F:
+            return 4;
+        case GL_RG32I:
+        case GL_RG32UI:
+        case GL_RG32F:
+            return 8;
 
-    case GL_RGB8:
-        return 3;
-    case GL_RGB8I:
-    case GL_RGB8UI:
-        return 3;
-    case GL_RGB16:
-        return 6;
-    case GL_RGB16I:
-    case GL_RGB16UI:
-    case GL_RGB16F:
-        return 6;
-    case GL_RGB32I:
-    case GL_RGB32UI:
-    case GL_RGB32F:
-        return 12;
+        case GL_RGB8:
+            return 3;
+        case GL_RGB8I:
+        case GL_RGB8UI:
+            return 3;
+        case GL_RGB16:
+            return 6;
+        case GL_RGB16I:
+        case GL_RGB16UI:
+        case GL_RGB16F:
+            return 6;
+        case GL_RGB32I:
+        case GL_RGB32UI:
+        case GL_RGB32F:
+            return 12;
 
-    case GL_RGBA8:
-        return 4;
-    case GL_RGBA8I:
-    case GL_RGBA8UI:
-        return 4;
-    case GL_RGBA16:
-        return 8;
-    case GL_RGBA16I:
-    case GL_RGBA16UI:
-    case GL_RGBA16F:
-        return 8;
-    case GL_RGBA32I:
-    case GL_RGBA32UI:
-    case GL_RGBA32F:
-        return 16;
+        case GL_RGBA8:
+            return 4;
+        case GL_RGBA8I:
+        case GL_RGBA8UI:
+            return 4;
+        case GL_RGBA16:
+            return 8;
+        case GL_RGBA16I:
+        case GL_RGBA16UI:
+        case GL_RGBA16F:
+            return 8;
+        case GL_RGBA32I:
+        case GL_RGBA32UI:
+        case GL_RGBA32F:
+            return 16;
 
-    case GL_DEPTH_COMPONENT16:
-        return 2;
-    case GL_DEPTH_COMPONENT24:
-        return 3;
-    case GL_DEPTH_COMPONENT32:
-        return 4;
-    case GL_DEPTH_COMPONENT32F:
-        return 4;
-    case GL_DEPTH24_STENCIL8:
-        return 4;
-    case GL_DEPTH32F_STENCIL8:
-        return 5;
+        case GL_DEPTH_COMPONENT16:
+            return 2;
+        case GL_DEPTH_COMPONENT24:
+            return 3;
+        case GL_DEPTH_COMPONENT32:
+            return 4;
+        case GL_DEPTH_COMPONENT32F:
+            return 4;
+        case GL_DEPTH24_STENCIL8:
+            return 4;
+        case GL_DEPTH32F_STENCIL8:
+            return 5;
 
-    case GL_STENCIL_INDEX8:
-        return 1;
+        case GL_STENCIL_INDEX8:
+            return 1;
 
-    case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
-    case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
-        return 8;
-    case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
-    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-        return 16;
+        case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
+        case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
+            return 8;
+        case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
+        case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+            return 16;
 
-    default:
-        LOG_E("Unknown internal format size for %s", glEnumToString(internalformat));
-        return 0;
+        default:
+            LOG_E("Unknown internal format size for %s", glEnumToString(internalformat));
+            return 0;
     }
 }
 
@@ -698,38 +719,56 @@ void glBufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage
     LOG()
     LOG_D("glBufferData, target = %s, size = %d, data = 0x%x, usage = %s", glEnumToString(target), size, data,
           glEnumToString(usage))
+
+    GLuint buffer = find_bound_buffer(target);
+    if (buffer && has_buffer(buffer)) {
+        auto& mapping = g_buffer_mapping[buffer];
+        if (mapping.shadowBuffer) {
+            free(mapping.shadowBuffer);
+        }
+        mapping.shadowBuffer = malloc(size);
+        if (data) {
+            memcpy(mapping.shadowBuffer, data, size);
+        } else {
+            memset(mapping.shadowBuffer, 0, size);
+        }
+    }
+
     GLES.glBufferData(target, size, data, usage);
-    set_buffer_data_size(find_bound_buffer(target), size);
+    set_buffer_data_size(buffer, size);
     CHECK_GL_ERROR
 }
 
 void* glMapBuffer(GLenum target, GLenum access) {
     LOG()
     LOG_D("glMapBuffer, target = %s, access = %s", glEnumToString(target), glEnumToString(access))
-    if (g_gles_caps.GL_OES_mapbuffer) {
-        return GLES.glMapBufferOES(target, access);
-    }
-    GLint buffer_size;
-    GLES.glGetBufferParameteriv(target, GL_BUFFER_SIZE, &buffer_size);
-    if (buffer_size <= 0 || glGetError() != GL_NO_ERROR) {
+
+    GLuint buffer = find_bound_buffer(target);
+    if (!buffer || !has_buffer(buffer)) {
         return nullptr;
     }
+
+    size_t size = get_buffer_data_size(buffer);
+    if (size == 0) {
+        return nullptr;
+    }
+
     GLbitfield flags = 0;
     switch (access) {
-    case GL_READ_ONLY:
-        flags = GL_MAP_READ_BIT;
-        break;
-    case GL_WRITE_ONLY:
-        flags = GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT;
-        break;
-    case GL_READ_WRITE:
-        flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
-        break;
-    default:
-        return nullptr;
+        case GL_READ_ONLY:
+            flags = GL_MAP_READ_BIT;
+            break;
+        case GL_WRITE_ONLY:
+            flags = GL_MAP_WRITE_BIT;
+            break;
+        case GL_READ_WRITE:
+            flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
+            break;
+        default:
+            return nullptr;
     }
-    void* ptr = glMapBufferRange(target, 0, buffer_size, flags);
-    return ptr;
+
+    return glMapBufferRange(target, 0, size, flags);
 }
 
 #if GLOBAL_DEBUG || DEBUG
@@ -740,47 +779,163 @@ void* glMapBuffer(GLenum target, GLenum access) {
 #if !defined(__APPLE__)
 extern "C"
 {
-    GLAPI GLAPIENTRY void* glMapBufferARB(GLenum target, GLenum access) __attribute__((alias("glMapBuffer")));
-    GLAPI GLAPIENTRY void glBufferDataARB(GLenum target, GLsizeiptr size, const void* data, GLenum usage)
-        __attribute__((alias("glBufferData")));
-    GLAPI GLAPIENTRY GLboolean glUnmapBufferARB(GLenum target) __attribute__((alias("glUnmapBuffer")));
-    GLAPI GLAPIENTRY void glBufferStorageARB(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags)
-        __attribute__((alias("glBufferStorage")));
-    GLAPI GLAPIENTRY void glBindBufferARB(GLenum target, GLuint buffer) __attribute__((alias("glBindBuffer")));
+GLAPI GLAPIENTRY void* glMapBufferARB(GLenum target, GLenum access) __attribute__((alias("glMapBuffer")));
+GLAPI GLAPIENTRY void glBufferDataARB(GLenum target, GLsizeiptr size, const void* data, GLenum usage)
+__attribute__((alias("glBufferData")));
+GLAPI GLAPIENTRY GLboolean glUnmapBufferARB(GLenum target) __attribute__((alias("glUnmapBuffer")));
+GLAPI GLAPIENTRY void glBufferStorageARB(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags)
+__attribute__((alias("glBufferStorage")));
+GLAPI GLAPIENTRY void glBindBufferARB(GLenum target, GLuint buffer) __attribute__((alias("glBindBuffer")));
+GLAPI GLAPIENTRY void glBufferSubDataARB(GLenum target, GLintptr offset, GLsizeiptr size, const void *data) __attribute__((alias("glBufferSubData")));
 }
 #endif
 
 void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) {
     LOG()
-    if (global_settings.buffer_coherent_as_flush) access &= ~GL_MAP_FLUSH_EXPLICIT_BIT;
-    //    access |= GL_MAP_UNSYNCHRONIZED_BIT;
-    return GLES.glMapBufferRange(target, offset, length, access);
+    LOG_D("glMapBufferRange, target = %s, offset = %p, length = %zi, access = 0x%x",
+          glEnumToString(target), (void*)offset, length, access)
+
+    GLuint buffer = find_bound_buffer(target);
+    if (!buffer || !has_buffer(buffer)) {
+        LOG_E("glMapBufferRange: Invalid buffer or buffer not found. Buffer ID: %u, Target: %s", buffer, glEnumToString(target));
+        return nullptr;
+    }
+
+    size_t bufferSize = get_buffer_data_size(buffer);
+    if (bufferSize == 0 || offset < 0 || (size_t)(offset + length) > bufferSize) {
+        LOG_E("glMapBufferRange: Invalid range. Buffer size: %zu, Offset: %ld, Length: %zu", bufferSize, offset, length);
+        return nullptr;
+    }
+
+    auto& mapping = g_buffer_mapping[buffer];
+    if (mapping.isMapped) {
+        LOG_E("Buffer %d is already mapped", buffer);
+        return nullptr;
+    }
+
+    if (!mapping.shadowBuffer) {
+        mapping.shadowBuffer = malloc(bufferSize);
+        if (!mapping.shadowBuffer) {
+            LOG_E("glMapBufferRange: Failed to allocate shadow buffer for buffer %d", buffer);
+            return nullptr;
+        }
+
+        memset(mapping.shadowBuffer, 0, bufferSize);
+
+        if (access & GL_MAP_WRITE_BIT) {
+            mapping.isDirty = true;
+        }
+    }
+
+    mapping.isMapped = true;
+    mapping.access = access;
+    mapping.offset = offset;
+    mapping.length = length;
+    mapping.persistent = (access & GL_MAP_PERSISTENT_BIT) != 0;
+
+    return static_cast<char*>(mapping.shadowBuffer) + offset;
 }
 
 GLboolean glUnmapBuffer(GLenum target) {
     LOG()
     LOG_D("%s(%s)", __func__, glEnumToString(target));
-    if (g_gles_caps.GL_OES_mapbuffer) return GLES.glUnmapBuffer(target);
 
-    GLboolean result = GLES.glUnmapBuffer(target);
-    CHECK_GL_ERROR
+    GLuint buffer = find_bound_buffer(target);
+    if (!buffer || !has_buffer(buffer)) {
+        return GL_FALSE;
+    }
+
+    auto it = g_buffer_mapping.find(buffer);
+    if (it == g_buffer_mapping.end() || !it->second.isMapped) {
+        return GL_FALSE;
+    }
+
+    auto& mapping = it->second;
+    GLboolean result = GL_TRUE;
+
+    if ((mapping.access & GL_MAP_WRITE_BIT) && (mapping.isDirty || !(mapping.access & GL_MAP_FLUSH_EXPLICIT_BIT))) {
+        GLuint real_buffer = find_real_buffer(buffer);
+        if (real_buffer) {
+            GLES.glBindBuffer(target, real_buffer);
+            GLES.glBufferSubData(target, mapping.offset, mapping.length,
+                                 static_cast<char*>(mapping.shadowBuffer) + mapping.offset);
+            mapping.isDirty = false;
+        } else {
+            result = GL_FALSE;
+        }
+    } else if ((mapping.access & GL_MAP_WRITE_BIT) && !mapping.isDirty) {
+        LOG_D("glUnmapBuffer: Buffer %u was mapped for writing, but isDirty is false. Assuming data was flushed explicitly or no changes were made.", buffer);
+    }
+
+    mapping.isMapped = false;
     return result;
 }
 
 void glBufferStorage(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags) {
     LOG()
-    if (GLES.glBufferStorageEXT) {
-        if (global_settings.buffer_coherent_as_flush && (flags & GL_MAP_PERSISTENT_BIT) != 0 ||
-            (flags & GL_DYNAMIC_STORAGE_BIT) != 0)
-            flags |= (GL_MAP_WRITE_BIT | GL_MAP_COHERENT_BIT | GL_MAP_PERSISTENT_BIT);
-        GLES.glBufferStorageEXT(target, size, data, flags);
+    //if (GLES.glBufferStorageEXT) {
+    //    GLES.glBufferStorageEXT(target, size, data, flags);
+    //}
+    bool isDynamic = (flags & GL_DYNAMIC_STORAGE_BIT) != 0;
+    GLenum usage = isDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
+    GLES.glBufferData(target, size, data, usage);
+
+    GLuint buffer = find_bound_buffer(target);
+    if (buffer && has_buffer(buffer)) {
+        auto& mapping = g_buffer_mapping[buffer];
+        if (mapping.shadowBuffer) {
+            free(mapping.shadowBuffer);
+        }
+        mapping.shadowBuffer = malloc(size);
+        if (data) {
+            memcpy(mapping.shadowBuffer, data, size);
+        } else {
+            memset(mapping.shadowBuffer, 0, size);
+        }
+        mapping.isMapped = false;
     }
+
+    set_buffer_data_size(buffer, size);
     CHECK_GL_ERROR
 }
 
 void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length) {
     LOG()
-    if (!global_settings.buffer_coherent_as_flush) GLES.glFlushMappedBufferRange(target, offset, length);
+    LOG_D("glFlushMappedBufferRange, target = %s, offset = %p, length = %zi",
+          glEnumToString(target), (void*)offset, length)
+
+    GLuint buffer = find_bound_buffer(target);
+    if (!buffer || !has_buffer(buffer)) {
+        LOG_E("glFlushMappedBufferRange: Invalid buffer or buffer not found. Buffer ID: %u, Target: %s", buffer, glEnumToString(target));
+        return;
+    }
+
+    auto it = g_buffer_mapping.find(buffer);
+    if (it == g_buffer_mapping.end() || !it->second.isMapped) {
+        LOG_E("glFlushMappedBufferRange: Buffer %u is not mapped.", buffer);
+        return;
+    }
+
+    auto& mapping = it->second;
+    if (!(mapping.access & GL_MAP_WRITE_BIT)) {
+        LOG_E("glFlushMappedBufferRange: Buffer %u was not mapped with GL_MAP_WRITE_BIT.", buffer);
+        return;
+    }
+
+    if (offset < mapping.offset || offset + length > mapping.offset + mapping.length) {
+        LOG_E("glFlushMappedBufferRange: Flushed range [%ld, %ld) is outside mapped range [%ld, %ld) for buffer %u.",
+              offset, offset + length, mapping.offset, mapping.offset + mapping.length, buffer);
+        return;
+    }
+
+    GLuint real_buffer = find_real_buffer(buffer);
+    if (real_buffer) {
+        GLES.glBindBuffer(target, real_buffer);
+        GLES.glBufferSubData(target, mapping.offset + offset, length, static_cast<char*>(mapping.shadowBuffer) + offset + mapping.offset);
+        CHECK_GL_ERROR
+    } else {
+        LOG_E("glFlushMappedBufferRange: Could not find real buffer for buffer ID %u", buffer);
+    }
 }
 
 void glGenVertexArrays(GLsizei n, GLuint* arrays) {
@@ -834,5 +989,92 @@ void glBindVertexArray(GLuint array) {
     }
     LOG_D("glBindVertexArray: %d -> %d", array, real_array)
     GLES.glBindVertexArray(real_array);
+    CHECK_GL_ERROR
+}
+
+void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void *data) {
+    LOG();
+    LOG_D("glBufferSubData, target = %s, offset = %p, size = %zi, data = 0x%x", glEnumToString(target), (void*)offset, size, data);
+
+    GLuint buffer = find_bound_buffer(target);
+    if (buffer && has_buffer(buffer)) {
+        auto it = g_buffer_mapping.find(buffer);
+        if (it != g_buffer_mapping.end() && it->second.shadowBuffer) {
+            void* shadowPtr = static_cast<char*>(it->second.shadowBuffer) + offset;
+            memcpy(shadowPtr, data, size);
+
+            if (it->second.isMapped && (it->second.access & GL_MAP_WRITE_BIT)) {
+                it->second.isDirty = true;
+            }
+        }
+    }
+
+    GLES.glBufferSubData(target, offset, size, data);
+    CHECK_GL_ERROR
+}
+
+void glCopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
+    LOG()
+    LOG_D("glCopyBufferSubData, readTarget = %s, writeTarget = %s, readOffset = %p, writeOffset = %p, size = %zi",
+          glEnumToString(readTarget), glEnumToString(writeTarget), (void*)readOffset, (void*)writeOffset, size)
+
+    GLuint readBuffer = find_bound_buffer(get_binding_query(readTarget));
+    if (!readBuffer || !has_buffer(readBuffer)) {
+        LOG_E("Invalid read buffer binding for copy operation");
+        return;
+    }
+
+    GLuint writeBuffer = find_bound_buffer(get_binding_query(writeTarget));
+    if (!writeBuffer || !has_buffer(writeBuffer)) {
+        LOG_E("Invalid write buffer binding for copy operation");
+        return;
+    }
+
+    GLint prevReadBinding = 0;
+    GLint prevWriteBinding = 0;
+    GLES.glGetIntegerv(get_binding_query(readTarget), &prevReadBinding);
+    GLES.glGetIntegerv(get_binding_query(writeTarget), &prevWriteBinding);
+
+    GLES.glBindBuffer(readTarget, find_real_buffer(readBuffer));
+    void* srcData = GLES.glMapBufferRange(readTarget, readOffset, size, GL_MAP_READ_BIT);
+
+    if (!srcData) {
+        LOG_E("Failed to map read buffer for copy operation");
+        GLES.glBindBuffer(readTarget, prevReadBinding);
+        GLES.glBindBuffer(writeTarget, prevWriteBinding);
+        return;
+    }
+
+    GLES.glBindBuffer(writeTarget, find_real_buffer(writeBuffer));
+
+    GLES.glBufferSubData(writeTarget, writeOffset, size, srcData);
+
+    GLES.glBindBuffer(readTarget, find_real_buffer(readBuffer));
+    GLES.glUnmapBuffer(readTarget);
+
+    GLES.glBindBuffer(readTarget, prevReadBinding);
+    GLES.glBindBuffer(writeTarget, prevWriteBinding);
+
+    auto itRead = g_buffer_mapping.find(readBuffer);
+    auto itWrite = g_buffer_mapping.find(writeBuffer);
+
+    if (itRead != g_buffer_mapping.end() && itRead->second.shadowBuffer) {
+        void* srcPtr = static_cast<char*>(itRead->second.shadowBuffer) + readOffset;
+
+        if (itWrite != g_buffer_mapping.end() && itWrite->second.shadowBuffer) {
+            void* dstPtr = static_cast<char*>(itWrite->second.shadowBuffer) + writeOffset;
+            memcpy(dstPtr, srcPtr, size);
+
+            if (itWrite->second.isMapped && (itWrite->second.access & GL_MAP_WRITE_BIT)) {
+                itWrite->second.isDirty = true;
+            }
+        }
+    } else if (itWrite != g_buffer_mapping.end() && itWrite->second.shadowBuffer) {
+        LOG_W("Source buffer has no shadow memory, target shadow may be outdated");
+        free(itWrite->second.shadowBuffer);
+        itWrite->second.shadowBuffer = nullptr;
+        itWrite->second.isMapped = false;
+    }
+
     CHECK_GL_ERROR
 }

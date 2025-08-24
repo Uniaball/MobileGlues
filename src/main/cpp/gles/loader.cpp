@@ -99,7 +99,7 @@ void set_hardware() {
 }
 
 void init_gl_state() {
-    gl_state = new gl_state_s;
+    gl_state = new gl_state_s();
     set_gl_state_proxy_height(0);
     set_gl_state_proxy_width(0);
     set_gl_state_proxy_intformat(0);
@@ -182,10 +182,6 @@ void InitGLESCapabilities() {
     }
 
     LOG_I("%sDetected GL_EXT_multi_draw_indirect!", g_gles_caps.GL_EXT_multi_draw_indirect ? "" : "Not ")
-
-    if (g_gles_caps.GL_EXT_buffer_storage) {
-        AppendExtension("GL_ARB_buffer_storage");
-    }
 
     if (g_gles_caps.GL_EXT_disjoint_timer_query && global_settings.ext_timer_query) {
         AppendExtension("GL_ARB_timer_query");
