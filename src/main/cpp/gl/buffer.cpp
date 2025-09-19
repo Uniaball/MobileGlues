@@ -8,10 +8,6 @@
 #include <cstring>
 #include <algorithm> // For std::max
 
-template <typename K, typename V>
-using unordered_map = ankerl::unordered_dense::map<K, V>;
-// using unordered_map = std::unordered_map<K, V>;
-
 #define DEBUG 0
 
 GLuint bound_array;
@@ -63,7 +59,7 @@ struct BufferMapping {
     bool persistent = false;
 };
 
-static unordered_map<GLuint, BufferMapping> g_buffer_mapping;
+static UnorderedMap<GLuint, BufferMapping> g_buffer_mapping;
 
 // --- 优化: 用指数扩容，减少大量小resize ---
 static inline int ensure_buffer_capacity(GLuint id) {
@@ -953,6 +949,10 @@ void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length)
 
     GLuint real_buffer = find_real_buffer(buffer);
     if (real_buffer) {
+        GLES.glBindBuffer(target, 0);
+        GLES.glBindBuffer(target, real_buffer);
+        GLES.glBufferSubData(target, mapping.offset + offset, length, static_cast<char*>(mapping.shadowBuffer) + offset + mapping.offset);
+        // call glBufferSubData twice to prevent unexpected error during buffer updating
         GLES.glBindBuffer(target, real_buffer);
         GLES.glBufferSubData(target, mapping.offset + offset, length, static_cast<char*>(mapping.shadowBuffer) + offset + mapping.offset);
         CHECK_GL_ERROR

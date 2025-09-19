@@ -13,25 +13,22 @@
 
 #define DEBUG 0
 
-template <typename Key, typename Value>
-using unordered_map = ankerl::unordered_dense::map<Key, Value>;
-
 GLuint bufSampelerProg;
 GLuint bufSampelerLoc;
 std::string bufSampelerName;
 
-extern std::unordered_map<GLuint, bool> program_map_is_sampler_buffer_emulated;
-extern std::unordered_map<GLuint, bool> program_map_is_atomic_counter_emulated;
+extern UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
+extern UnorderedMap<GLuint, bool> program_map_is_atomic_counter_emulated;
 
 // 优化1：为 SamplerInfo 的 uniform location 查找和采样器查找增加缓存，避免重复查询
 struct UniformLocationCache {
-    unordered_map<GLuint, GLint> widthLoc;
-    unordered_map<GLuint, GLint> heightLoc;
-    unordered_map<GLuint, std::vector<GLint>> samplerLocs;
+    UnorderedMap<GLuint, GLint> widthLoc;
+    UnorderedMap<GLuint, GLint> heightLoc;
+    UnorderedMap<GLuint, std::vector<GLint>> samplerLocs;
 };
 static UniformLocationCache g_uniformCache;
 
-unordered_map<GLuint, SamplerInfo> g_samplerCacheForSamplerBuffer;
+UnorderedMap<GLuint, SamplerInfo> g_samplerCacheForSamplerBuffer;
 
 // 优化2：线程局部索引缓冲区，减少 malloc/free 频率
 static thread_local std::unique_ptr<std::vector<uint8_t>> g_tempIndexBuffer;

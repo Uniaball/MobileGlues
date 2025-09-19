@@ -4,8 +4,6 @@
 
 #include "log.h"
 #include <unistd.h>
-#include <unordered_map>
-#include <unordered_set>
 #include <mutex>
 
 #include <GL/gl.h>
