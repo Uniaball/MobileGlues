@@ -795,7 +795,6 @@ void glBufferStorage(GLenum target, GLsizeiptr size, const void* data, GLbitfiel
         if (global_settings.buffer_coherent_as_flush && ((flags & GL_MAP_PERSISTENT_BIT) != 0 ||
             (flags & GL_DYNAMIC_STORAGE_BIT) != 0))
             flags |= (GL_MAP_WRITE_BIT | GL_MAP_COHERENT_BIT | GL_MAP_PERSISTENT_BIT);
-        }
         GLES.glBufferStorageEXT(target, size, data, flags);
     }
     CHECK_GL_ERROR
