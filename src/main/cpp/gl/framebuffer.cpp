@@ -17,6 +17,7 @@ struct attachment_t {
     GLuint texture;
     GLint level;
 };
+
 struct framebuffer_t {
     bool initialized = false;
     std::unique_ptr<attachment_t[]> color_attachments; // 用unique_ptr自动管理内存
@@ -67,11 +68,26 @@ inline void init_framebuffer(framebuffer_t& fbo) {
 void glBindFramebuffer(GLenum target, GLuint framebuffer) {
     ensure_max_attachments();
     auto& fbo = get_framebuffer(framebuffer);
-    if (framebuffer != 0) init_framebuffer(fbo);
+    
+    if (framebuffer == 0 && target != GL_READ_FRAMEBUFFER) {
+        framebuffer = FSR1_Context::g_renderFBO;
+        FSR1_Context::g_dirty = true;
+    }
 
-    if (target == GL_DRAW_FRAMEBUFFER || target == GL_FRAMEBUFFER) current_draw_fbo = framebuffer;
-    if (target == GL_READ_FRAMEBUFFER || target == GL_FRAMEBUFFER) current_read_fbo = framebuffer;
+    if (target != GL_READ_FRAMEBUFFER) {
+        set_gl_state_current_draw_fbo(framebuffer);
+    }
 
+    if (framebuffer != 0) {
+        init_framebuffer(fbo);
+    }
+    if (target == GL_DRAW_FRAMEBUFFER || target == GL_FRAMEBUFFER) {
+        current_draw_fbo = framebuffer;
+    }
+    if (target == GL_READ_FRAMEBUFFER || target == GL_FRAMEBUFFER) {
+        current_read_fbo = framebuffer;
+    }
+    
     GLES.glBindFramebuffer(target, framebuffer);
 }
 

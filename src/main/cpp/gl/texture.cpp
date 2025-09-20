@@ -234,8 +234,8 @@ void MarkTextureObjectForDeletion(unsigned texture) {
         }
     }
 
-    delete textureObject;
     BufferObjectsVec[texture] = nullptr;
+    delete textureObject;
 }
 
 TextureObject* mgGetTexObjectByTarget(GLenum target) {
