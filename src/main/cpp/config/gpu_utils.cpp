@@ -215,7 +215,7 @@ int hasVulkan12() {
     appInfo.pNext = nullptr;
     appInfo.pApplicationName = "Vulkan Check";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "DesktopGlues";
+    appInfo.pEngineName = "MobileGlues";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_3;
 

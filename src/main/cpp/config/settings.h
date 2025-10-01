@@ -2,8 +2,8 @@
 // Created by hanji on 2025/2/9.
 //
 
-#ifndef DESKTOPGLUES_PLUGIN_SETTINGS_H
-#define DESKTOPGLUES_PLUGIN_SETTINGS_H
+#ifndef MOBILEGLUES_PLUGIN_SETTINGS_H
+#define MOBILEGLUES_PLUGIN_SETTINGS_H
 
 #include <string>
 #include <vector>
@@ -168,4 +168,4 @@ void init_settings_post();
 std::string dump_settings_string(std::string prefix = "");
 void set_multidraw_setting();
 
-#endif //DESKTOPGLUES_PLUGIN_SETTINGS_H
+#endif //MOBILEGLUES_PLUGIN_SETTINGS_H
