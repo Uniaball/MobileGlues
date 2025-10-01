@@ -4,7 +4,7 @@ DesktopGlues，取「(on) Desktop, GL uses ES」之意，是基于 MobileGlues(h
 
 <details>
 <summary> 目前版本 </summary>
- V1.0.3·RC1
+ V1.0.3
 </details>
 
 ## License

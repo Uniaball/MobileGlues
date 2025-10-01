@@ -165,5 +165,7 @@ extern global_settings_t global_settings;
 
 void init_settings();
 void init_settings_post();
-    
+std::string dump_settings_string(std::string prefix = "");
+void set_multidraw_setting();
+
 #endif //MOBILEGLUES_PLUGIN_SETTINGS_H

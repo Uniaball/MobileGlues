@@ -23,13 +23,13 @@ __attribute__((used))
 const char *license = "GNU LGPL-2.1 License";
 
 void init_config() {
-  if (check_path())
-    config_refresh();
+    if (check_path())
+        config_refresh();
 }
 
 void show_license() {
-  LOG_V("The Open Source License of MobileGlues: ");
-  LOG_V("  %s", license);
+    LOG_V("The Open Source License of MobileGlues: ");
+    LOG_V("  %s", license);
 }
 
 #if PROFILING
@@ -37,39 +37,40 @@ void show_license() {
 PERFETTO_TRACK_EVENT_STATIC_STORAGE();
 
 void init_perfetto() {
-  perfetto::TracingInitArgs args;
+    perfetto::TracingInitArgs args;
 
-  args.backends |= perfetto::kSystemBackend;
+    args.backends |= perfetto::kSystemBackend;
 
-  perfetto::Tracing::Initialize(args);
-  perfetto::TrackEvent::Register();
+    perfetto::Tracing::Initialize(args);
+    perfetto::TrackEvent::Register();
 }
 #endif
 
 void proc_init() {
-  init_config();
+    init_config();
 
-  clear_log();
-  start_log();
+    clear_log();
+    start_log();
 
-  LOG_V("Initializing %s ...", RENDERERNAME);
-  show_license();
+    LOG_V("Initializing %s ...", RENDERERNAME);
+    show_license();
 
-  init_settings();
+    init_settings();
 
-  load_libs();
-  init_target_egl();
-  init_target_gles();
+    load_libs();
+    init_target_egl();
+    init_target_gles();
+    set_multidraw_setting();
 
-  init_settings_post();
+    init_settings_post();
 
 #if PROFILING
-  init_perfetto();
+    init_perfetto();
 #endif
 
-  // Cleanup
+    // Cleanup
 #ifndef __APPLE__
-  destroy_temp_egl_ctx();
+    destroy_temp_egl_ctx();
 #endif
-  g_initialized = 1;
+    g_initialized = 1;
 }

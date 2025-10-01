@@ -13,6 +13,7 @@
 
 #include <EGL/egl.h>
 #include <GLES3/gl32.h>
+#include <MG/extensions.h>
 
 #include "egl/egl.h"
 #include "egl/loader.h"

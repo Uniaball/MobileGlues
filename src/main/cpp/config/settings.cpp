@@ -320,3 +320,56 @@ void init_settings_post() {
         break;
     }
 }
+
+std::string dump_settings_string(std::string prefix) {\
+    std::stringstream ss;
+
+    ss << prefix << "Angle: " << (global_settings.angle == AngleMode::Enabled ? "Enabled" : "Disabled") << "\n";
+    ss << prefix << "IgnoreError: ";
+    switch (global_settings.ignore_error) {
+    case IgnoreErrorLevel::None: ss << "None"; break;
+    case IgnoreErrorLevel::Partial: ss << "Partial"; break;
+    case IgnoreErrorLevel::Full: ss << "Full"; break;
+    }
+    ss << "\n";
+
+    ss << prefix << "ExtGL43: " << (global_settings.ext_gl43 ? "True" : "False") << "\n";
+    ss << prefix << "ExtComputeShader: " << (global_settings.ext_compute_shader ? "True" : "False") << "\n";
+    ss << prefix << "ExtTimerQuery: " << (global_settings.ext_timer_query ? "True" : "False") << "\n";
+    ss << prefix << "ExtDirectStateAccess: " << (global_settings.ext_direct_state_access ? "True" : "False") << "\n";
+    ss << prefix << "MaxGlslCacheSize: " << (global_settings.max_glsl_cache_size / 1024 / 1024) << "MB\n";
+
+    ss << prefix << "MultidrawMode: ";
+    switch (global_settings.multidraw_mode) {
+    case multidraw_mode_t::Auto: ss << "Auto"; break;
+    case multidraw_mode_t::PreferIndirect: ss << "Indirect (glDrawElementsIndirect)"; break;
+    case multidraw_mode_t::PreferBaseVertex: ss << "BaseVertex (glDrawElementsBaseVertex)"; break;
+    case multidraw_mode_t::PreferMultidrawIndirect: ss << "MultidrawIndirect (glMultiDrawElementsIndirect)"; break;
+    case multidraw_mode_t::DrawElements: ss << "DrawElements (glDrawElements with per-draw CPU rebase)"; break;
+    case multidraw_mode_t::Compute: ss << "Compute (glDrawElements with compute-shader rebase)"; break;
+    default: ss << "Unknown"; break;
+    }
+    ss << "\n";
+
+    ss << prefix << "AngleDepthClearFixMode: "
+       << (global_settings.angle_depth_clear_fix_mode == AngleDepthClearFixMode::Disabled ? "Disabled" : "Enabled") << "\n";
+
+    ss << prefix << "BufferCoherentAsFlush: " << (global_settings.buffer_coherent_as_flush ? "True" : "False") << "\n";
+
+    ss << prefix << "CustomGLVersion: "
+       << ((GLVersion.toInt(2) == DEFAULT_GL_VERSION) ? "(Default)" : std::to_string(GLVersion.toInt(2))) << "\n";
+
+    ss << prefix << "Fsr1Setting: ";
+
+    switch (global_settings.fsr1_setting) {
+    case FSR1_Quality_Preset::Disabled: ss << "Disabled"; break;
+    case FSR1_Quality_Preset::UltraQuality: ss << "UltraQuality"; break;
+    case FSR1_Quality_Preset::Quality: ss << "Quality"; break;
+    case FSR1_Quality_Preset::Balanced: ss << "Balanced"; break;
+    case FSR1_Quality_Preset::Performance: ss << "Performance"; break;
+    default: ss << "Unknown"; break;
+    }
+    ss << "\n";
+
+    return ss.str();
+}

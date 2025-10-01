@@ -40,6 +40,9 @@ void glGetIntegerv(GLenum pname, GLint *params) {
     LOG_D("glGetIntegerv, pname: %s", glEnumToString(pname))
 #endif
     switch (pname) {
+        case GL_NUM_EXTENSIONS + GL_BACKEND_GETTER_MG:
+            GLES.glGetIntegerv(pname - GL_BACKEND_GETTER_MG, params);
+            return;
         case GL_CONTEXT_PROFILE_MASK:
             (*params) = GL_CONTEXT_CORE_PROFILE_BIT;
             break;
@@ -124,7 +127,10 @@ std::string GetExtensionsList() {
 }
 
 void InitGLESBaseExtensions() {
-    es_ext = "GL_ARB_fragment_program "
+    es_ext = "GL_MG_mobileglues "
+             "GL_MG_backend_string_getter_access "
+             "GL_MG_settings_string_dump "
+             "GL_ARB_fragment_program "
              "GL_ARB_vertex_buffer_object "
              "GL_ARB_vertex_array_object "
              "GL_ARB_vertex_buffer "
@@ -267,18 +273,36 @@ const GLubyte * glGetString( GLenum name ) {
             return (const GLubyte *)versionString.c_str();
         }
         case GL_RENDERER: {
-            if (rendererString.empty()) {
-                rendererString = getGpuName() + " | " + getGLESName();
+            if (rendererString == std::string("")) {
+                std::string gpuName = getGpuName();
+                std::string glesName = getGLESName();
+                rendererString = std::string(gpuName) + " | " + std::string(glesName);
             }
             return (const GLubyte *)rendererString.c_str();
         }
-        case GL_SHADING_LANGUAGE_VERSION:
+        case GL_SHADING_LANGUAGE_VERSION: {
             if (hardware->es_version < 310)
                 return (const GLubyte *) "4.00 DesktopGlues with glslang and SPIRV-Cross";
             else
                 return (const GLubyte *) "4.60 DesktopGlues with glslang and SPIRV-Cross";
-        case GL_EXTENSIONS:
-            return (const GLubyte *) GetExtensionsList().c_str();
+        }
+        case GL_EXTENSIONS: {
+            static std::string cached;
+            cached = GetExtensionsList();
+            return (const GLubyte *) cached.c_str();
+        }
+        case GL_SETTINGS_MG: {
+            static char* settings_string = nullptr;
+            std::string tmp = dump_settings_string("  ");
+            settings_string = strdup(tmp.c_str());
+            return reinterpret_cast<const GLubyte*>(settings_string);
+        }
+        case GL_VERSION + GL_BACKEND_GETTER_MG:
+        case GL_VENDOR + GL_BACKEND_GETTER_MG:
+        case GL_RENDERER + GL_BACKEND_GETTER_MG:
+        case GL_EXTENSIONS + GL_BACKEND_GETTER_MG:
+        case GL_SHADING_LANGUAGE_VERSION + GL_BACKEND_GETTER_MG:
+            return GLES.glGetString(name - GL_BACKEND_GETTER_MG);
         default:
             return GLES.glGetString(name);
     }
