@@ -1,4 +1,4 @@
-name: Build MobileGlues for iOS
+name: Build DesktopGlues for iOS
 on: 
    workflow_dispatch:
 jobs:
@@ -8,7 +8,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Build MobileGlues
+      - name: Build DesktopGlues
         run: |
           cd src/main/cpp 
           git clone --depth 1 https://github.com/g-truc/glm.git 3rdparty/glm
@@ -22,11 +22,11 @@ jobs:
             -DMACOS=ON \
             -DPLATFORM=OS64 \
             -DCMAKE_C_FLAGS=-Wno-error=implicit-function-declaration
-          cmake --build build --config RelWithDebInfo --target mobileglues
-          codesign -s - build/libmobileglues.dylib
+          cmake --build build --config RelWithDebInfo --target desktopglues
+          codesign -s - build/libdesktopglues.dylib
 
       - name: Upload lib
         uses: actions/upload-artifact@v4
         with:
-          name: MobileGlues-iOS-dylib
-          path: src/main/cpp/build/libmobileglues.dylib
+          name: DesktopGlues-iOS-dylib
+          path: src/main/cpp/build/libdesktopglues.dylib
