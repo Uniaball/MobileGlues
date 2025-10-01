@@ -1,38 +1,22 @@
-//
-// Created by hanji on 2025/2/6.
-//
-
 #include "framebuffer.h"
 #include "log.h"
 #include "../config/settings.h"
 #include "FSR1/FSR1.h"
 #include <vector>
-#include <memory>
 #include <algorithm>
+#include <cstring>
 
 #define DEBUG 0
 
-struct attachment_t {
-    GLenum textarget;
-    GLuint texture;
-    GLint level;
-};
-
-struct framebuffer_t {
-    bool initialized = false;
-    std::unique_ptr<attachment_t[]> color_attachments; // 用unique_ptr自动管理内存
-    attachment_t depth_attachment = {0};
-    attachment_t stencil_attachment = {0};
-};
-
-static GLint MAX_COLOR_ATTACHMENTS = 0;
-static GLint MAX_DRAW_BUFFERS = 0;
-static GLuint current_draw_fbo = 0;
-static GLuint current_read_fbo = 0;
-static std::vector<framebuffer_t> framebuffers;
+// 全局变量定义
+GLint MAX_COLOR_ATTACHMENTS = 0;
+GLint MAX_DRAW_BUFFERS = 0;
+GLuint current_draw_fbo = 0;
+GLuint current_read_fbo = 0;
+std::vector<framebuffer_t> framebuffers;
 
 // 用于减少重复调用 glGetIntegerv
-inline void ensure_max_attachments() {
+void ensure_max_attachments() {
     if (MAX_COLOR_ATTACHMENTS == 0) {
         GLES.glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &MAX_COLOR_ATTACHMENTS);
         MAX_COLOR_ATTACHMENTS = std::max(MAX_COLOR_ATTACHMENTS, 8);
@@ -43,8 +27,14 @@ inline void ensure_max_attachments() {
     }
 }
 
+// 获取最大绘制缓冲区数量
+GLint getMaxDrawBuffers() {
+    ensure_max_attachments();
+    return MAX_DRAW_BUFFERS;
+}
+
 // 更快扩容，避免频繁resize
-inline framebuffer_t& get_framebuffer(GLuint id) {
+framebuffer_t& get_framebuffer(GLuint id) {
     if (id >= framebuffers.size()) {
         framebuffers.resize(std::max(framebuffers.size() * 2, static_cast<size_t>(id + 1)));
     }
@@ -55,13 +45,22 @@ void InitFramebufferMap(size_t expectedSize) {
     framebuffers.reserve(expectedSize);
 }
 
-// 初始化FBO，自动管理color_attachments
-inline void init_framebuffer(framebuffer_t& fbo) {
+// 初始化FBO，手动管理color_attachments内存
+void init_framebuffer(framebuffer_t& fbo) {
     if (!fbo.initialized) {
-        fbo.color_attachments = std::make_unique<attachment_t[]>(MAX_COLOR_ATTACHMENTS);
-        std::fill_n(fbo.color_attachments.get(), MAX_COLOR_ATTACHMENTS, attachment_t{0});
+        fbo.color_attachments = new attachment_t[MAX_COLOR_ATTACHMENTS];
+        std::fill_n(fbo.color_attachments, MAX_COLOR_ATTACHMENTS, attachment_t{0});
         fbo.initialized = true;
     }
+}
+
+// 清理FBO资源
+void cleanup_framebuffer(framebuffer_t& fbo) {
+    if (fbo.color_attachments) {
+        delete[] fbo.color_attachments;
+        fbo.color_attachments = nullptr;
+    }
+    fbo.initialized = false;
 }
 
 // 绑定FBO
@@ -72,10 +71,6 @@ void glBindFramebuffer(GLenum target, GLuint framebuffer) {
     if (framebuffer == 0 && target != GL_READ_FRAMEBUFFER) {
         framebuffer = FSR1_Context::g_renderFBO;
         FSR1_Context::g_dirty = true;
-    }
-
-    if (target != GL_READ_FRAMEBUFFER) {
-        set_gl_state_current_draw_fbo(framebuffer);
     }
 
     if (framebuffer != 0) {
@@ -92,7 +87,7 @@ void glBindFramebuffer(GLenum target, GLuint framebuffer) {
 }
 
 // 更新attachment, 用于color/depth/stencil
-inline void update_attachment(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
+void update_attachment(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
     GLuint current_fbo = (target == GL_READ_FRAMEBUFFER) ? current_read_fbo : current_draw_fbo;
     if (current_fbo == 0) return;
     auto& fbo = framebuffers[current_fbo];
@@ -142,7 +137,7 @@ void glDrawBuffer(GLenum buffer) {
 
 // 批量draw buffers，减少vector分配
 void glDrawBuffers(GLsizei n, const GLenum* bufs) {
-    LOG_D("glDrawBuffers called with n=%d", n); // 添加日志
+    LOG_D("glDrawBuffers called with n=%d", n);
     
     // 处理默认帧缓冲区 (FBO 0)
     if (current_draw_fbo == 0) {
@@ -201,7 +196,6 @@ void glDrawBuffers(GLsizei n, const GLenum* bufs) {
     // 最终调用 OpenGL
     GLES.glDrawBuffers(n, new_bufs.data());
 }
-
 
 // 读buffer，根据attachment快速设置
 void glReadBuffer(GLenum src) {
