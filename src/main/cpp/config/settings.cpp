@@ -190,28 +190,28 @@ void init_settings() {
     global_settings.fsr1_setting = fsr1Setting;
 #endif
 
-    LOG_V("[MobileGlues] Setting: enableAngle                 = %s",
+    LOG_V("[desktopglues] Setting: enableAngle                 = %s",
           global_settings.angle == AngleMode::Enabled ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: ignoreError                 = %i", static_cast<int>(global_settings.ignore_error))
-    LOG_V("[MobileGlues] Setting: enableExtComputeShader      = %s",
+    LOG_V("[desktopglues] Setting: ignoreError                 = %i", static_cast<int>(global_settings.ignore_error))
+    LOG_V("[desktopglues] Setting: enableExtComputeShader      = %s",
           global_settings.ext_compute_shader ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: enableExtGL43               = %s", global_settings.ext_gl43 ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: enableExtTimerQuery         = %s", global_settings.ext_timer_query ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: enableExtDirectStateAccess  = %s",
+    LOG_V("[desktopglues] Setting: enableExtGL43               = %s", global_settings.ext_gl43 ? "true" : "false")
+    LOG_V("[desktopglues] Setting: enableExtTimerQuery         = %s", global_settings.ext_timer_query ? "true" : "false")
+    LOG_V("[desktopglues] Setting: enableExtDirectStateAccess  = %s",
           global_settings.ext_direct_state_access ? "true" : "false")
-    LOG_V("[MobileGlues] Setting: maxGlslCacheSize            = %i",
+    LOG_V("[desktopglues] Setting: maxGlslCacheSize            = %i",
           static_cast<int>(global_settings.max_glsl_cache_size / 1024 / 1024))
-    LOG_V("[MobileGlues] Setting: angleDepthClearFixMode      = %i",
+    LOG_V("[desktopglues] Setting: angleDepthClearFixMode      = %i",
           static_cast<int>(global_settings.angle_depth_clear_fix_mode))
-    LOG_V("[MobileGlues] Setting: bufferCoherentAsFlush       = %i",
+    LOG_V("[desktopglues] Setting: bufferCoherentAsFlush       = %i",
           static_cast<int>(global_settings.buffer_coherent_as_flush))
     if (global_settings.custom_gl_version.isEmpty()) {
-        LOG_V("[MobileGlues] Setting: customGLVersion             = (default)");
+        LOG_V("[desktopglues] Setting: customGLVersion             = (default)");
     } else {
-        LOG_V("[MobileGlues] Setting: customGLVersion             = %s",
+        LOG_V("[desktopglues] Setting: customGLVersion             = %s",
               global_settings.custom_gl_version.toString().c_str());
     }
-    LOG_V("[MobileGlues] Setting: fsr1Setting                 = %i", static_cast<int>(global_settings.fsr1_setting))
+    LOG_V("[desktopglues] Setting: fsr1Setting                 = %i", static_cast<int>(global_settings.fsr1_setting))
 
     GLVersion =
         global_settings.custom_gl_version.isEmpty() ? Version(DEFAULT_GL_VERSION) : global_settings.custom_gl_version;
@@ -252,7 +252,7 @@ void set_multidraw_setting() { // should be called after init_gles_target()
         global_settings.multidraw_mode = multidraw_mode_t::Auto;
         break;
     }
-    LOG_V("[MobileGlues] Setting: multidrawMode               = %s", draw_mode_str.c_str())
+    LOG_V("[desktopglues] Setting: multidrawMode               = %s", draw_mode_str.c_str())
 }
 
 void init_settings_post() {

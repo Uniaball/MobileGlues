@@ -2,8 +2,8 @@
 // Created by hanji on 2025/2/9.
 //
 
-#ifndef MOBILEGLUES_PLUGIN_GPU_UTILS_H
-#define MOBILEGLUES_PLUGIN_GPU_UTILS_H
+#ifndef DESKTOPGLUES_PLUGIN_GPU_UTILS_H
+#define DESKTOPGLUES_PLUGIN_GPU_UTILS_H
 
 #include <string.h>
 #include <string>
@@ -30,4 +30,4 @@ bool checkIfANGLESupported(const char* gpu);
 }
 #endif
 
-#endif //MOBILEGLUES_PLUGIN_GPU_UTILS_H
+#endif //DESKTOPGLUES_PLUGIN_GPU_UTILS_H

@@ -1,5 +1,5 @@
-#ifndef _MOBILEGLUES_CONFIG_H_
-#define _MOBILEGLUES_CONFIG_H_
+#ifndef _DESKTOPGLUES_CONFIG_H_
+#define _DESKTOPGLUES_CONFIG_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,4 +25,4 @@ void config_cleanup();
 }
 #endif
 
-#endif // _MOBILEGLUES_CONFIG_H_
+#endif // _DESKTOPGLUES_CONFIG_H_
