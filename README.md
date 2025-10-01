@@ -13,9 +13,15 @@ DesktopGlues 延续 MobileGlues 的开源协议，采用 GNU LGPL-2.1 License。
 
 详见 "LICENSE" (https://github.com/MobileGL-Dev/MobileGlues/blob/main/LICENSE)
 
-## Third party components
 
+# Third party components
 
-SPIRV-Cross（KhronosGroup，Apache 2.0）、glslang（KhronosGroup，多协议）、GlslOptimizerV2（aiekick，Apache 2.0）、cJSON（DaveGamble，MIT）、GLM（G-Truc Creation，The Happy Bunny License）、FidelityFX-FSR（AMD，MIT）。
+**SPIRV-Cross** by **KhronosGroup** - [Apache License 2.0](https://github.com/KhronosGroup/SPIRV-Cross/blob/master/LICENSE): [github](https://github.com/KhronosGroup/SPIRV-Cross)
 
-依赖详情可参考 "MobileGlues 第三方组件说明" (原链接)。
+**glslang** by **KhronosGroup** - [Various Licenses](https://github.com/KhronosGroup/glslang/blob/main/LICENSE.txt): [github](https://github.com/KhronosGroup/glslang)
+
+**cJSON** by **DaveGamble** - [MIT License](https://github.com/DaveGamble/cJSON/blob/master/LICENSE): [github](https://github.com/DaveGamble/cJSON)
+
+**OpenGL Mathematics (*GLM*)** by **G-Truc Creation** - [The Happy Bunny License](https://github.com/g-truc/glm/blob/master/copying.txt): [github](https://github.com/g-truc/glm)
+
+**FidelityFX-FSR** by **AMD** - [MIT License](https://github.com/GPUOpen-Effects/FidelityFX-FSR/blob/master/license.txt): [github](https://github.com/GPUOpen-Effects/FidelityFX-FSR) 

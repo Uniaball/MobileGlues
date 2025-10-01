@@ -22,28 +22,6 @@ __attribute__((used))
 #endif
 const char *license = "GNU LGPL-2.1 License";
 
-#ifndef __APPLE__
-extern char *(*MesaConvertShader)(const char *src, unsigned int type,
-                                  unsigned int glsl, unsigned int essl);
-void init_libshaderconv() {
-  const char *shaderconv_lib = "libshaderconv";
-  const char *func_name = "MesaConvertShader";
-  const char *glslconv_name[] = {shaderconv_lib, nullptr};
-  void *glslconv = open_lib(glslconv_name, shaderconv_lib);
-  if (glslconv == nullptr) {
-    LOG_D("%s not found\n", shaderconv_lib);
-  } else {
-    MesaConvertShader = (char *(*)(const char *, unsigned int, unsigned int,
-                                   unsigned int))dlsym(glslconv, func_name);
-    if (MesaConvertShader) {
-      LOG_D("%s loaded\n", shaderconv_lib);
-    } else {
-      LOG_D("failed to load %s\n", shaderconv_lib);
-    }
-  }
-}
-#endif
-
 void init_config() {
   if (check_path())
     config_refresh();
@@ -84,10 +62,6 @@ void proc_init() {
   init_target_gles();
 
   init_settings_post();
-
-#ifndef __APPLE__
-  init_libshaderconv();
-#endif
 
 #if PROFILING
   init_perfetto();

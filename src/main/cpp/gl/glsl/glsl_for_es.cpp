@@ -20,10 +20,6 @@
 
 const char* atomicCounterEmulatedWatermark = "// Non-opaque atomic uniform converted to SSBO";
 
-#if !defined(__APPLE__)
-char* (*MesaConvertShader)(const char *src, unsigned int type, unsigned int glsl, unsigned int essl);
-#endif
-
 static TBuiltInResource InitResources()
 {
     TBuiltInResource Resources{};
@@ -293,8 +289,8 @@ std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_vers
         return (char*)cachedESSL;
     }
     return_code = -1;
-    std::string converted = glsl_version < 140 ? GLSLtoGLSLES_1(glsl_code, glsl_type, essl_version, return_code)
-                                               : GLSLtoGLSLES_2(glsl_code, glsl_type, essl_version, return_code);
+    //std::string converted = glsl_version<140? GLSLtoGLSLES_1(glsl_code, glsl_type, essl_version, return_code):GLSLtoGLSLES_2(glsl_code, glsl_type, essl_version, return_code);
+    std::string converted = GLSLtoGLSLES_2(glsl_code, glsl_type, essl_version, return_code);
     if (return_code >= 0 && !converted.empty()) {
         converted = process_uniform_declarations(converted);
         Cache::get_instance().put(sha256_string.c_str(), converted.c_str());
@@ -536,8 +532,12 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
 inline int get_or_add_glsl_version(std::string& glsl) {
     int glsl_version = getGLSLVersion(glsl.c_str());
     if (glsl_version == -1) {
-        glsl_version = 140;
-        glsl.insert(0, "#version 140\n");
+        glsl_version = 150;
+        glsl.insert(0, "#version 150\n");
+    } else if (glsl_version < 140) {
+        // force upgrade glsl version
+        glsl = replace_line_starting_with(glsl, "#version", "#version 150 compatibility\n");
+        glsl_version = 150;
     }
     LOG_D("GLSL version: %d", glsl_version)
     return glsl_version;
@@ -631,7 +631,8 @@ std::string GLSLtoGLSLES_2(const char *glsl_code, GLenum glsl_type, uint essl_ve
     return essl;
 }
 
-std::string GLSLtoGLSLES_1(const char *glsl_code, GLenum glsl_type, uint esversion, int& return_code) {
+std::string GLSLtoGLSLES_1(const char *glsl_code, GLenum glsl_type, uint esversion, int& return_code) { // useless now
+    /*
 #if !defined(__APPLE__)
     LOG_W("Warning: use glsl optimizer to convert shader.")
     if (esversion < 300) esversion = 300;
@@ -642,4 +643,5 @@ std::string GLSLtoGLSLES_1(const char *glsl_code, GLenum glsl_type, uint esversi
     LOG_W_FORCE("Cannot convert glsl with version %d in MacOS/iOS", esversion);
     return std::string(glsl_code);
 #endif
+    */
 }

@@ -86,6 +86,8 @@ void init_settings() {
 
     Version customGLVersion(customGLVersionInt);
 
+    int isInPluginApp = 0;
+    GetEnvVarInt("MG_PLUGIN_STATUS", &isInPluginApp, 0);
     int fclVersion = 0;
     GetEnvVarInt("FCL_VERSION_CODE", &fclVersion, 0);
     int zlVersion = 0;
@@ -95,7 +97,7 @@ void init_settings() {
     char* var = getenv("MG_DIR_PATH");
     LOG_V("MG_DIR_PATH = %s", var ? var : "(null)")
 
-    if (fclVersion == 0 && zlVersion == 0 && pgwVersion == 0 && !var) {
+    if (isInPluginApp == 0 && fclVersion == 0 && zlVersion == 0 && pgwVersion == 0 && !var) {
         LOG_V("Unsupported launcher detected, force using default config.")
         angleConfig = AngleConfig::DisableIfPossible;
         noErrorConfig = NoErrorConfig::Auto;

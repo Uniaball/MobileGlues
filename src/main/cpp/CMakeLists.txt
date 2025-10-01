@@ -99,7 +99,6 @@ else()
         target_link_libraries(${CMAKE_PROJECT_NAME}
                 ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libglslang.a
                 ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libspirv-cross-c-shared.so
-                ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libshaderconv.so
                 ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libGenericCodeGen.a
                 ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libglslang-default-resource-limits.a
                 ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libMachineIndependent.a
@@ -121,9 +120,6 @@ if(ANDROID)
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libspirv-cross-c-shared.so
-            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_SOURCE_DIR}/libraries/${ANDROID_ABI}/libshaderconv.so
             $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
     )
 endif()
