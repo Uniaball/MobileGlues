@@ -12,10 +12,14 @@
 #include <cmath>
 #include <array>
 #include <memory>
+#include "framebuffer.h"
 
 #define DEBUG 0
 
 static GLclampd currentDepthValue;
+
+extern GLuint current_draw_fbo;
+extern std::vector<framebuffer_t> framebuffers;
 
 void glClearDepth(GLclampd depth) {
     LOG()
@@ -115,18 +119,33 @@ void glClear(GLbitfield mask) {
     LOG();
     LOG_D("glClear, mask = 0x%x", mask);
 
+    INIT_CHECK_GL_ERROR
+
+    // 先执行一次清除操作
+    GLES.glClear(mask);
+    CHECK_GL_ERROR_NO_INIT
+
+    // 检查是否需要特殊处理深度清除
     if (global_settings.angle == AngleMode::Enabled &&
         mask == GL_DEPTH_BUFFER_BIT && 
-        std::abs(currentDepthValue - 1.0f) <= 0.001f) {
-        if (global_settings.angle_depth_clear_fix_mode == AngleDepthClearFixMode::Mode1)
+        std::abs(currentDepthValue - 1.0f) <= 0.001f &&
+        framebuffers[current_draw_fbo].color_attachments_all_none) {
+        
+        LOG_D("doing depth workaround");
+        
+        if (global_settings.angle_depth_clear_fix_mode == AngleDepthClearFixMode::Mode1) {
             DrawDepthClearTri();
+        } 
         else if (global_settings.angle_depth_clear_fix_mode == AngleDepthClearFixMode::Mode2) {
             const GLfloat clear_depth_value = 1.0f;
             GLES.glClearBufferfv(GL_DEPTH, 0, &clear_depth_value);
         }
+        
+        // 特殊处理后再次清除
+        GLES.glClear(mask);
     }
-    GLES.glClear(mask);
-    CHECK_GL_ERROR;
+
+    CHECK_GL_ERROR_NO_INIT;
 }
 
 void glHint(GLenum target, GLenum mode) {
@@ -134,39 +153,39 @@ void glHint(GLenum target, GLenum mode) {
     LOG_D("glHint, target = %s, mode = %s", glEnumToString(target), glEnumToString(mode))
 }
 
-// --- 高效线程安全FakeSync ---
+// --- 高效线程安全FakeSync实现 ---
 struct FakeSync {
     int id;
 };
 static int g_fake_sync_counter = 1;
 
-GLAPI GLAPIENTRY GLsync glFenceSync(GLenum condition, GLbitfield flags) {
+GLsync glFenceSync(GLenum condition, GLbitfield flags) {
     (void)condition;
     (void)flags;
     auto* sync = new FakeSync{g_fake_sync_counter++};
     return reinterpret_cast<GLsync>(sync);
 }
 
-GLAPI GLAPIENTRY GLboolean glIsSync(GLsync sync) {
+GLboolean glIsSync(GLsync sync) {
     return (sync != nullptr) ? GL_TRUE : GL_FALSE;
 }
 
-GLAPI GLAPIENTRY void glDeleteSync(GLsync sync) {
+void glDeleteSync(GLsync sync) {
     if (sync) {
         delete reinterpret_cast<FakeSync*>(sync);
     }
 }
 
-GLAPI GLAPIENTRY GLenum glClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+GLenum glClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
     (void)sync; (void)flags; (void)timeout;
     return GL_ALREADY_SIGNALED;
 }
 
-GLAPI GLAPIENTRY void glWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+void glWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
     (void)sync; (void)flags; (void)timeout;
 }
 
-GLAPI GLAPIENTRY void glGetSynciv(GLsync sync, GLenum pname, GLsizei bufSize,
+void glGetSynciv(GLsync sync, GLenum pname, GLsizei bufSize,
                  GLsizei* length, GLint* values) {
     if (!values) return;
     switch (pname) {

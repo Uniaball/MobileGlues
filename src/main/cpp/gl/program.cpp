@@ -17,15 +17,6 @@
 
 #define DEBUG 0
 
-const char* DEFAULT_FRAGMENT_SHADER_SOURCE = R"glsl(#version 300 es
-precision mediump float;
-
-out vec4 fragColor;
-
-void main() {
-    fragColor = vec4(1.0, 1.0, 1.0, 1.0);
-})glsl";
-
 extern UnorderedMap<GLuint, bool> shader_map_is_sampler_buffer_emulated;
 UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
 
@@ -106,7 +97,26 @@ void glBindFragDataLocation(GLuint program, GLuint color, const GLchar* name) {
     shaderInfo.frag_data_changed = 1;
 }
 
-static GLuint default_fs = 0;
+static std::string DefaultFSSource;
+static unsigned CurrentDefaultFSSourceVersion = 0; // the version (hardware->es_version) may change during runtime
+
+void GenerateDefaultFSSource() {
+    if (CurrentDefaultFSSourceVersion != hardware->es_version) {
+        CurrentDefaultFSSourceVersion = hardware->es_version;
+        std::ostringstream ss;
+        ss << "#version " << CurrentDefaultFSSourceVersion << " es\n";
+        ss << "precision mediump float;\n\n";
+        ss << "out vec4 fragColor;\n\n";
+        ss << "void main() {\n";
+        ss << "    fragColor = vec4(1.0, 1.0, 1.0, 1.0);\n";
+        ss << "}\n";
+
+        DefaultFSSource = ss.str();
+    }
+}
+
+
+static UnorderedMap<unsigned, GLuint> DefaultFSMap; // essl version <-> shader id
 void glLinkProgram(GLuint program) {
     LOG()
 
@@ -132,9 +142,13 @@ void glLinkProgram(GLuint program) {
 
     // Generate defaut fragment shader if needed
     if (program_map_should_generate_fs[program] == ShouldGenerateFSState::Maybe) {
+        GenerateDefaultFSSource();
+        GLuint &default_fs = DefaultFSMap[CurrentDefaultFSSourceVersion];
         if (!default_fs) {
             default_fs = GLES.glCreateShader(GL_FRAGMENT_SHADER);
-            GLES.glShaderSource(default_fs, 1, &DEFAULT_FRAGMENT_SHADER_SOURCE, nullptr);
+            const char* src = DefaultFSSource.c_str();
+            GLES.glShaderSource(default_fs, 1, &src, nullptr);
+
             GLES.glCompileShader(default_fs);
 
             GLint success = 0;
@@ -151,6 +165,7 @@ void glLinkProgram(GLuint program) {
         }
 
         if (default_fs) {
+            LOG_D("Try to attach missing default FS for program %u...", program);
             GLES.glAttachShader(program, default_fs);
         }
     }

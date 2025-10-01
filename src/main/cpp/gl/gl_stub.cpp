@@ -2487,7 +2487,6 @@ STUB_FUNCTION_HEAD(void, glReplacementCodeuiTexCoord2fNormal3fVertex3fvSUN,const
 STUB_FUNCTION_HEAD(void, glReplacementCodeuiTexCoord2fColor4fNormal3fVertex3fSUN, GLuint rc, GLfloat s, GLfloat t, GLfloat r, GLfloat g, GLfloat b, GLfloat a, GLfloat nx, GLfloat ny, GLfloat nz, GLfloat x, GLfloat y, GLfloat z); STUB_FUNCTION_END_NO_RETURN(void, glReplacementCodeuiTexCoord2fColor4fNormal3fVertex3fSUN,rc,s,t,r,g,b,a,nx,ny,nz,x,y,z)
 STUB_FUNCTION_HEAD(void, glReplacementCodeuiTexCoord2fColor4fNormal3fVertex3fvSUN,const GLuint* rc, const GLfloat* tc, const GLfloat* c, const GLfloat* n, const GLfloat* v); STUB_FUNCTION_END_NO_RETURN(void, glReplacementCodeuiTexCoord2fColor4fNormal3fVertex3fvSUN,rc,tc,c,n,v)
 
-STUB_FUNCTION_HEAD(void, glFinish) STUB_FUNCTION_END_NO_RETURN(void, glFinish)
 //NATIVE_FUNCTION_HEAD(void, glFlushMappedBufferRange, GLenum target, GLintptr offset, GLsizeiptr length) STUB_FUNCTION_END_NO_RETURN(void, glFlushMappedBufferRange, target,offset,length)
 
 #ifdef __cplusplus

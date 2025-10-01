@@ -11,7 +11,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
-        ndkVersion = "27.1.12297006"
+        ndkVersion = "27.3.13750724"
     }
 
     buildTypes {

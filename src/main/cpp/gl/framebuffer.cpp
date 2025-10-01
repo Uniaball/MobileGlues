@@ -137,32 +137,71 @@ void glDrawBuffer(GLenum buffer) {
         buffers[buffer - GL_COLOR_ATTACHMENT0] = buffer;
         GLES.glDrawBuffers(maxAttachments, buffers.data());
     }
+    CHECK_GL_ERROR;
 }
 
 // 批量draw buffers，减少vector分配
 void glDrawBuffers(GLsizei n, const GLenum* bufs) {
+    LOG_D("glDrawBuffers called with n=%d", n); // 添加日志
+    
+    // 处理默认帧缓冲区 (FBO 0)
     if (current_draw_fbo == 0) {
         GLES.glDrawBuffers(n, bufs);
         return;
     }
-    static std::vector<GLenum> new_bufs(8);
-    if (n > new_bufs.size()) new_bufs.resize(n);
-    auto& fbo = framebuffers[current_draw_fbo];
+    
+    framebuffer_t& fbo = framebuffers[current_draw_fbo];
+    
+    // 检查是否所有缓冲区都是 GL_NONE
+    bool all_none = true;
     for (int i = 0; i < n; ++i) {
-        if (bufs[i] >= GL_COLOR_ATTACHMENT0 && bufs[i] < GL_COLOR_ATTACHMENT0 + MAX_COLOR_ATTACHMENTS) {
+        if (bufs[i] != GL_NONE) {
+            all_none = false;
+            break;
+        }
+    }
+    
+    // 处理全为 GL_NONE 的情况
+    if (all_none) {
+        LOG_D("glDrawBuffers, fb %d all_none true", current_draw_fbo);
+        fbo.color_attachments_all_none = true;
+        GLES.glDrawBuffers(n, bufs);
+        return;
+    }
+    
+    LOG_D("glDrawBuffers, fb %d all_none false", current_draw_fbo);
+    fbo.color_attachments_all_none = false;
+    
+    // 使用静态 vector 避免重复内存分配
+    static std::vector<GLenum> new_bufs(8);
+    if (n > new_bufs.size()) {
+        new_bufs.resize(n);
+    }
+    
+    // 处理每个缓冲区
+    for (int i = 0; i < n; ++i) {
+        if (bufs[i] >= GL_COLOR_ATTACHMENT0 && 
+            bufs[i] < GL_COLOR_ATTACHMENT0 + MAX_COLOR_ATTACHMENTS) {
+            
             GLenum logical_attachment = bufs[i];
             GLenum physical_attachment = GL_COLOR_ATTACHMENT0 + i;
             new_bufs[i] = physical_attachment;
+            
             int index = logical_attachment - GL_COLOR_ATTACHMENT0;
             auto& attach = fbo.color_attachments[index];
+            
+            // 设置帧缓冲区纹理附件
             GLES.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, physical_attachment,
                                    attach.textarget, attach.texture, attach.level);
         } else {
             new_bufs[i] = bufs[i];
         }
     }
+    
+    // 最终调用 OpenGL
     GLES.glDrawBuffers(n, new_bufs.data());
 }
+
 
 // 读buffer，根据attachment快速设置
 void glReadBuffer(GLenum src) {

@@ -9,4 +9,4 @@
 	url = https://github.com/g-truc/glm.git
 [submodule "src/main/cpp/include/FastSTL"]
 	path = src/main/cpp/include/FastSTL
-	url = git@github.com:MobileGL-Dev/FastSTL.git
+	url = https://github.com/MobileGL-Dev/FastSTL.git

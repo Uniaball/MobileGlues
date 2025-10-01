@@ -913,23 +913,7 @@ void glRenderbufferStorage(GLenum target, GLenum internalFormat, GLsizei width, 
 
     INIT_CHECK_GL_ERROR_FORCE
 
-    CLEAR_GL_ERROR_NO_INIT
-
-    LOG_D("mg.glRenderbufferStorage, target: %s, internalFormat: %s, width: %d, "
-          "height: %d",
-          glEnumToString(target), glEnumToString(internalFormat), width, height)
-
-    GLint realInternalFormat;
-    GLES.glGetTexLevelParameteriv(target, 0, GL_TEXTURE_INTERNAL_FORMAT, &realInternalFormat);
-    ERR = GLES.glGetError();
-    if (realInternalFormat != 0 && ERR == GL_NO_ERROR)
-        internalFormat = (GLenum)realInternalFormat;
-    else
-        internalFormat = GL_DEPTH_COMPONENT24;
-
-    CLEAR_GL_ERROR_NO_INIT
-
-    LOG_D("es.glRenderbufferStorage, target: %s, internalFormat: %s, width: %d, "
+    LOG_D("glRenderbufferStorage, target: %s, internalFormat: %s, width: %d, "
           "height: %d",
           glEnumToString(target), glEnumToString(internalFormat), width, height)
 
@@ -943,16 +927,6 @@ void glRenderbufferStorageMultisample(GLenum target, GLsizei samples, GLenum int
     LOG()
 
     INIT_CHECK_GL_ERROR_FORCE
-
-    CLEAR_GL_ERROR_NO_INIT
-
-    GLint realInternalFormat;
-    GLES.glGetTexLevelParameteriv(target, 0, GL_TEXTURE_INTERNAL_FORMAT, &realInternalFormat);
-    ERR = GLES.glGetError();
-    if (realInternalFormat != 0 && ERR == GL_NO_ERROR)
-        internalFormat = (GLenum)realInternalFormat;
-    else
-        internalFormat = GL_DEPTH_COMPONENT24;
 
     LOG_D("glRenderbufferStorageMultisample, target: %d, samples: %d, "
           "internalFormat: %d, width: %d, height: %d",
