@@ -28,7 +28,7 @@ void init_config() {
 }
 
 void show_license() {
-    LOG_V("The Open Source License of MobileGlues: ");
+    LOG_V("The Open Source License of DesktopGlues: ");
     LOG_V("  %s", license);
 }
 
