@@ -32,7 +32,7 @@ jobs:
         -DANDROID_TOOLCHAIN=clang
         
     - name: Build
-      run: cmake --build src/main/cpp/build --config Release --target desktopglues --parallel $(nproc)
+      run: cmake --build src/main/cpp/build --config Release --target mobileglues --parallel $(nproc)
 
     - name: Strip
       run: |
