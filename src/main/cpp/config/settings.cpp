@@ -25,6 +25,7 @@ void init_settings() {
     global_settings.ext_direct_state_access = true;
     global_settings.custom_gl_version = {0, 0, 0}; // will go default
     global_settings.fsr1_setting = FSR1_Quality_Preset::Disabled;
+    global_settings.hide_mg_env_level = HideMGEnvLevel::Disabled;
 
 #else
 
@@ -50,6 +51,8 @@ void init_settings() {
     int customGLVersionInt = success ? config_get_int("customGLVersion") : DEFAULT_GL_VERSION;
     FSR1_Quality_Preset fsr1Setting =
         success ? static_cast<FSR1_Quality_Preset>(config_get_int("fsr1Setting")) : FSR1_Quality_Preset::Disabled;
+    HideMGEnvLevel hideMGEnvLevel =
+        success ? static_cast<HideMGEnvLevel>(config_get_int("hideMGEnvLevel")) : HideMGEnvLevel::Disabled;
 
     if (customGLVersionInt < 0) {
         customGLVersionInt = 0;
@@ -61,7 +64,7 @@ void init_settings() {
     }
 
     if (static_cast<int>(angleConfig) < 0 || static_cast<int>(angleConfig) > 3) {
-        angleConfig = AngleConfig::DisableIfPossible;
+        angleConfig = AngleConfig::EnableIfPossible;
     }
     if (static_cast<int>(noErrorConfig) < 0 || static_cast<int>(noErrorConfig) > 3) {
         noErrorConfig = NoErrorConfig::Auto;
@@ -83,6 +86,10 @@ void init_settings() {
         static_cast<int>(fsr1Setting) >= static_cast<int>(FSR1_Quality_Preset::MaxValue)) {
         fsr1Setting = FSR1_Quality_Preset::Disabled;
     }
+    if (static_cast<int>(hideMGEnvLevel) < 0 ||
+        static_cast<int>(hideMGEnvLevel) >= static_cast<int>(HideMGEnvLevel::MaxValue)) {
+        hideMGEnvLevel = HideMGEnvLevel::Disabled;
+    }
 
     Version customGLVersion(customGLVersionInt);
 
@@ -94,10 +101,10 @@ void init_settings() {
     GetEnvVarInt("ZALITH_VERSION_CODE", &zlVersion, 0);
     int pgwVersion = 0;
     GetEnvVarInt("PGW_VERSION_CODE", &pgwVersion, 0);
-    char* var = getenv("MG_DIR_PATH");
-    LOG_V("MG_DIR_PATH = %s", var ? var : "(null)")
 
-    if (isInPluginApp == 0 && fclVersion == 0 && zlVersion == 0 && pgwVersion == 0 && !var) {
+    LOG_V("MG_DIR_PATH = %s", mg_directory_path ? mg_directory_path : "(default)")
+
+    if (isInPluginApp == 0 && fclVersion == 0 && zlVersion == 0 && pgwVersion == 0 && !is_custom_mg_dir) {
         LOG_V("Unsupported launcher detected, force using default config.")
         angleConfig = AngleConfig::DisableIfPossible;
         noErrorConfig = NoErrorConfig::Auto;
@@ -108,6 +115,7 @@ void init_settings() {
         maxGlslCacheSize = 0;
         angleDepthClearFixMode = AngleDepthClearFixMode::Disabled;
         fsr1Setting = FSR1_Quality_Preset::Disabled;
+        hideMGEnvLevel = HideMGEnvLevel::Disabled;
     }
 
     AngleMode finalAngleMode = AngleMode::Disabled;
@@ -188,6 +196,7 @@ void init_settings() {
     global_settings.angle_depth_clear_fix_mode = angleDepthClearFixMode;
     global_settings.custom_gl_version = customGLVersion;
     global_settings.fsr1_setting = fsr1Setting;
+    global_settings.hide_mg_env_level = hideMGEnvLevel;
 #endif
 
     LOG_V("[mobileglues] Setting: enableAngle                 = %s",
@@ -211,7 +220,9 @@ void init_settings() {
         LOG_V("[mobileglues] Setting: customGLVersion             = %s",
               global_settings.custom_gl_version.toString().c_str());
     }
-    LOG_V("[mobileglues] Setting: fsr1Setting                 = %i", static_cast<int>(global_settings.fsr1_setting))
+    LOG_V("[MobileGlues] Setting: fsr1Setting                 = %i", static_cast<int>(global_settings.fsr1_setting))
+    LOG_V("[MobileGlues] Setting: hideMGEnvLevel              = %i",
+          static_cast<int>(global_settings.hide_mg_env_level))
 
     GLVersion =
         global_settings.custom_gl_version.isEmpty() ? Version(DEFAULT_GL_VERSION) : global_settings.custom_gl_version;
@@ -321,15 +332,21 @@ void init_settings_post() {
     }
 }
 
-std::string dump_settings_string(std::string prefix) {\
+std::string dump_settings_string(std::string prefix) {
     std::stringstream ss;
 
     ss << prefix << "Angle: " << (global_settings.angle == AngleMode::Enabled ? "Enabled" : "Disabled") << "\n";
     ss << prefix << "IgnoreError: ";
     switch (global_settings.ignore_error) {
-    case IgnoreErrorLevel::None: ss << "None"; break;
-    case IgnoreErrorLevel::Partial: ss << "Partial"; break;
-    case IgnoreErrorLevel::Full: ss << "Full"; break;
+    case IgnoreErrorLevel::None:
+        ss << "None";
+        break;
+    case IgnoreErrorLevel::Partial:
+        ss << "Partial";
+        break;
+    case IgnoreErrorLevel::Full:
+        ss << "Full";
+        break;
     }
     ss << "\n";
 
@@ -341,18 +358,33 @@ std::string dump_settings_string(std::string prefix) {\
 
     ss << prefix << "MultidrawMode: ";
     switch (global_settings.multidraw_mode) {
-    case multidraw_mode_t::Auto: ss << "Auto"; break;
-    case multidraw_mode_t::PreferIndirect: ss << "Indirect (glDrawElementsIndirect)"; break;
-    case multidraw_mode_t::PreferBaseVertex: ss << "BaseVertex (glDrawElementsBaseVertex)"; break;
-    case multidraw_mode_t::PreferMultidrawIndirect: ss << "MultidrawIndirect (glMultiDrawElementsIndirect)"; break;
-    case multidraw_mode_t::DrawElements: ss << "DrawElements (glDrawElements with per-draw CPU rebase)"; break;
-    case multidraw_mode_t::Compute: ss << "Compute (glDrawElements with compute-shader rebase)"; break;
-    default: ss << "Unknown"; break;
+    case multidraw_mode_t::Auto:
+        ss << "Auto";
+        break;
+    case multidraw_mode_t::PreferIndirect:
+        ss << "Indirect (glDrawElementsIndirect)";
+        break;
+    case multidraw_mode_t::PreferBaseVertex:
+        ss << "BaseVertex (glDrawElementsBaseVertex)";
+        break;
+    case multidraw_mode_t::PreferMultidrawIndirect:
+        ss << "MultidrawIndirect (glMultiDrawElementsIndirect)";
+        break;
+    case multidraw_mode_t::DrawElements:
+        ss << "DrawElements (glDrawElements with per-draw CPU rebase)";
+        break;
+    case multidraw_mode_t::Compute:
+        ss << "Compute (glDrawElements with compute-shader rebase)";
+        break;
+    default:
+        ss << "Unknown";
+        break;
     }
     ss << "\n";
 
     ss << prefix << "AngleDepthClearFixMode: "
-       << (global_settings.angle_depth_clear_fix_mode == AngleDepthClearFixMode::Disabled ? "Disabled" : "Enabled") << "\n";
+       << (global_settings.angle_depth_clear_fix_mode == AngleDepthClearFixMode::Disabled ? "Disabled" : "Enabled")
+       << "\n";
 
     ss << prefix << "BufferCoherentAsFlush: " << (global_settings.buffer_coherent_as_flush ? "True" : "False") << "\n";
 
@@ -362,13 +394,30 @@ std::string dump_settings_string(std::string prefix) {\
     ss << prefix << "Fsr1Setting: ";
 
     switch (global_settings.fsr1_setting) {
-    case FSR1_Quality_Preset::Disabled: ss << "Disabled"; break;
-    case FSR1_Quality_Preset::UltraQuality: ss << "UltraQuality"; break;
-    case FSR1_Quality_Preset::Quality: ss << "Quality"; break;
-    case FSR1_Quality_Preset::Balanced: ss << "Balanced"; break;
-    case FSR1_Quality_Preset::Performance: ss << "Performance"; break;
-    default: ss << "Unknown"; break;
+    case FSR1_Quality_Preset::Disabled:
+        ss << "Disabled";
+        break;
+    case FSR1_Quality_Preset::UltraQuality:
+        ss << "UltraQuality";
+        break;
+    case FSR1_Quality_Preset::Quality:
+        ss << "Quality";
+        break;
+    case FSR1_Quality_Preset::Balanced:
+        ss << "Balanced";
+        break;
+    case FSR1_Quality_Preset::Performance:
+        ss << "Performance";
+        break;
+    default:
+        ss << "Unknown";
+        break;
     }
+    ss << "\n";
+
+    ss << prefix << "HideMGEnvLevel: " << ((global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled)
+        ? "Disabled" : std::to_string(static_cast<int>(global_settings.hide_mg_env_level)));
+
     ss << "\n";
 
     return ss.str();

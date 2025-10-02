@@ -45,6 +45,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         gl/buffer.cpp
         gl/getter.cpp
         gl/pixel.cpp
+        gl/random_string_gen.cpp
         gl/ExtWrappers/DSAWrapper.cpp
         gl/ExtWrappers/MultiBindWrapper.cpp
         gl/glsl/glsl_for_es.cpp

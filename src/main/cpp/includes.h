@@ -20,20 +20,18 @@
 
 #if PROFILING
 #include <perfetto.h>
-PERFETTO_DEFINE_CATEGORIES(
-        perfetto::Category("glcalls")
-                .SetDescription("Calls from OpenGL"),
-        perfetto::Category("internal")
-                .SetDescription("Internal calls"));
+PERFETTO_DEFINE_CATEGORIES(perfetto::Category("glcalls").SetDescription("Calls from OpenGL"),
+                           perfetto::Category("internal").SetDescription("Internal calls"));
 #endif
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-static int g_initialized = 0;
+    static int g_initialized = 0;
 
-void proc_init();
+    void proc_init();
 
 #ifdef __cplusplus
 }
@@ -41,13 +39,8 @@ void proc_init();
 
 #include <FastSTL/UnorderedMap.h>
 
-template <
-        typename Key,
-        typename T,
-        class Hash = std::hash<Key>,
-        class KeyEqual = std::equal_to<Key>,
-        class Allocator = std::allocator<std::pair<const Key, T>>
->
+template <typename Key, typename T, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>,
+          class Allocator = std::allocator<std::pair<const Key, T>>>
 using UnorderedMap = FastSTL::unordered_map<Key, T, Hash, KeyEqual, Allocator>;
 
-#endif //MOBILEGLUES_INCLUDES_H
+#endif // MOBILEGLUES_INCLUDES_H

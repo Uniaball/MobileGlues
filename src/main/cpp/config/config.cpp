@@ -14,12 +14,13 @@
 
 char* DEFAULT_MG_DIRECTORY_PATH = "/sdcard/MG";
 
-char* mg_directory_path;
-char* config_file_path;
-char* log_file_path;
-char* glsl_cache_file_path;
+bool is_custom_mg_dir = false;
+char* mg_directory_path = nullptr;
+char* config_file_path = nullptr;
+char* log_file_path = nullptr;
+char* glsl_cache_file_path = nullptr;
 
-static cJSON* config_json = NULL;
+static cJSON* config_json = nullptr;
 
 int initialized = 0;
 
@@ -31,8 +32,12 @@ char* concatenate(char* str1, char* str2) {
 }
 
 int check_path() {
-    char* var = getenv("MG_DIR_PATH");
-    mg_directory_path = var ? var : DEFAULT_MG_DIRECTORY_PATH;
+    if (!mg_directory_path) {
+        char* var = getenv("MG_DIR_PATH");
+        is_custom_mg_dir = var ? true : false;
+        mg_directory_path = var ? strdup(var) : DEFAULT_MG_DIRECTORY_PATH;
+        unsetenv("MG_DIR_PATH");
+    }
     config_file_path = concatenate(mg_directory_path, "/config.json");
     log_file_path = concatenate(mg_directory_path, "/latest.log");
     glsl_cache_file_path = concatenate(mg_directory_path, "/glsl_cache.tmp");
