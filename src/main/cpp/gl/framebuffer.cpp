@@ -37,6 +37,10 @@ framebuffer_t& get_framebuffer(GLuint id) {
     return framebuffers[id];
 }
 
+void InitFramebufferMap(size_t expectedSize) {
+    framebuffers.reserve(expectedSize);
+}
+
 void init_framebuffer(framebuffer_t& fbo) {
     if (!fbo.initialized) {
         fbo.color_attachments = new attachment_t[MAX_COLOR_ATTACHMENTS];
