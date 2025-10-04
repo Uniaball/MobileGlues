@@ -372,7 +372,7 @@ const GLubyte * glGetString(GLenum name) {
         case GL_EXTENSIONS:
             return reinterpret_cast<const GLubyte*>(GetExtensionsList().c_str());
             
-        case GL_SETTINGS_MG:
+        case GL_SETTINGS_MG: {  // 添加作用域块
             if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) 
                 return GLES.glGetString(name);
                 
@@ -381,6 +381,7 @@ const GLubyte * glGetString(GLenum name) {
             std::string tmp = dump_settings_string("  ");
             settings_string = strdup(tmp.c_str());
             return reinterpret_cast<const GLubyte*>(settings_string);
+        }
             
         case GL_VERSION + GL_BACKEND_GETTER_MG:
         case GL_VENDOR + GL_BACKEND_GETTER_MG:
