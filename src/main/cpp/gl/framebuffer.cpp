@@ -4,61 +4,64 @@
 #include "FSR1/FSR1.h"
 #include <vector>
 #include <algorithm>
-#include <memory>
 
-// 全局变量定义
+#define DEBUG 0
+
 static GLint MAX_COLOR_ATTACHMENTS = 0;
 static GLint MAX_DRAW_BUFFERS = 0;
 GLuint current_draw_fbo = 0;
 GLuint current_read_fbo = 0;
 std::vector<framebuffer_t> framebuffers;
 
-// 初始化最大附件数量
 void ensure_max_attachments() {
     if (MAX_COLOR_ATTACHMENTS == 0) {
         GLES.glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &MAX_COLOR_ATTACHMENTS);
         MAX_COLOR_ATTACHMENTS = MAX_COLOR_ATTACHMENTS > 0 ? MAX_COLOR_ATTACHMENTS : 8;
+        #if DEBUG
+        LOG_D("MAX_COLOR_ATTACHMENTS: %d", MAX_COLOR_ATTACHMENTS);
+        #endif
     }
     if (MAX_DRAW_BUFFERS == 0) {
         GLES.glGetIntegerv(GL_MAX_DRAW_BUFFERS, &MAX_DRAW_BUFFERS);
         MAX_DRAW_BUFFERS = MAX_DRAW_BUFFERS > 0 ? MAX_DRAW_BUFFERS : 8;
+        #if DEBUG
+        LOG_D("MAX_DRAW_BUFFERS: %d", MAX_DRAW_BUFFERS);
+        #endif
     }
 }
 
-// 获取帧缓冲区对象
 framebuffer_t& get_framebuffer(GLuint id) {
     if (id >= framebuffers.size()) {
-        framebuffers.resize(id + 10); // 更保守的扩容策略
+        framebuffers.resize(id + 1);
     }
     return framebuffers[id];
 }
 
-// 初始化帧缓冲区映射
-void InitFramebufferMap(size_t expectedSize) {
-    framebuffers.reserve(expectedSize);
-}
-
-// 初始化帧缓冲区
 void init_framebuffer(framebuffer_t& fbo) {
     if (!fbo.initialized) {
         fbo.color_attachments = new attachment_t[MAX_COLOR_ATTACHMENTS];
         std::fill_n(fbo.color_attachments, MAX_COLOR_ATTACHMENTS, attachment_t{0});
         fbo.initialized = true;
+        #if DEBUG
+        LOG_D("Initialized FBO %d", &fbo - framebuffers.data());
+        #endif
     }
 }
 
-// 绑定FBO
 void glBindFramebuffer(GLenum target, GLuint framebuffer) {
+    #if DEBUG
+    LOG()
+    #endif
+    
     ensure_max_attachments();
     auto& fbo = get_framebuffer(framebuffer);
     
     if (framebuffer == 0 && target != GL_READ_FRAMEBUFFER) {
         framebuffer = FSR1_Context::g_renderFBO;
         FSR1_Context::g_dirty = true;
-    }
-
-    if (target != GL_READ_FRAMEBUFFER) {
-        set_gl_state_current_draw_fbo(framebuffer);
+        #if DEBUG
+        LOG_D("Bound FSR FBO: %d", framebuffer);
+        #endif
     }
 
     if (framebuffer != 0) {
@@ -73,9 +76,11 @@ void glBindFramebuffer(GLenum target, GLuint framebuffer) {
     }
     
     GLES.glBindFramebuffer(target, framebuffer);
+    #if DEBUG
+    CHECK_GL_ERROR
+    #endif
 }
 
-// 更新附件信息
 void update_attachment(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
     GLuint current_fbo = (target == GL_READ_FRAMEBUFFER) ? current_read_fbo : current_draw_fbo;
     if (current_fbo == 0) return;
@@ -84,6 +89,9 @@ void update_attachment(GLenum target, GLenum attachment, GLenum textarget, GLuin
     if (attachment >= GL_COLOR_ATTACHMENT0 && attachment < GL_COLOR_ATTACHMENT0 + MAX_COLOR_ATTACHMENTS) {
         int index = attachment - GL_COLOR_ATTACHMENT0;
         fbo.color_attachments[index] = {textarget, texture, level};
+        #if DEBUG
+        LOG_D("Updated color attachment %d for FBO %d: tex=%d", index, current_fbo, texture);
+        #endif
     } 
     else if (attachment == GL_DEPTH_ATTACHMENT) {
         fbo.depth_attachment = {textarget, texture, level};
@@ -93,19 +101,28 @@ void update_attachment(GLenum target, GLenum attachment, GLenum textarget, GLuin
     }
 }
 
-// 帧缓冲纹理操作
 void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
     update_attachment(target, attachment, textarget, texture, level);
     GLES.glFramebufferTexture2D(target, attachment, textarget, texture, level);
+    #if DEBUG
+    CHECK_GL_ERROR
+    #endif
 }
 
 void glFramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level) {
     update_attachment(target, attachment, GL_TEXTURE_2D, texture, level);
     GLES.glFramebufferTexture(target, attachment, texture, level);
+    #if DEBUG
+    CHECK_GL_ERROR
+    #endif
 }
 
-// 绘制缓冲区设置
 void glDrawBuffer(GLenum buffer) {
+    #if DEBUG
+    LOG()
+    LOG_D("glDrawBuffer %d", buffer)
+    #endif
+    
     if (current_draw_fbo == 0) {
         GLenum buffers[] = {buffer};
         glDrawBuffers(1, buffers);
@@ -124,10 +141,17 @@ void glDrawBuffer(GLenum buffer) {
         bufs[buffer - GL_COLOR_ATTACHMENT0] = buffer;
         GLES.glDrawBuffers(MAX_DRAW_BUFFERS, bufs.data());
     }
+    #if DEBUG
+    CHECK_GL_ERROR
+    #endif
 }
 
-// 批量绘制缓冲区设置
 void glDrawBuffers(GLsizei n, const GLenum* bufs) {
+    #if DEBUG
+    LOG()
+    LOG_D("glDrawBuffers: n=%d", n);
+    #endif
+    
     if (current_draw_fbo == 0) {
         GLES.glDrawBuffers(n, bufs);
         return;
@@ -135,7 +159,6 @@ void glDrawBuffers(GLsizei n, const GLenum* bufs) {
     
     auto& fbo = framebuffers[current_draw_fbo];
     
-    // 检查是否所有缓冲区都是 GL_NONE
     bool all_none = true;
     for (int i = 0; i < n; ++i) {
         if (bufs[i] != GL_NONE) {
@@ -152,7 +175,6 @@ void glDrawBuffers(GLsizei n, const GLenum* bufs) {
     
     fbo.color_attachments_all_none = false;
     
-    // 使用静态vector避免重复内存分配
     static std::vector<GLenum> new_bufs;
     new_bufs.resize(n);
     
@@ -169,10 +191,16 @@ void glDrawBuffers(GLsizei n, const GLenum* bufs) {
     }
     
     GLES.glDrawBuffers(n, new_bufs.data());
+    #if DEBUG
+    CHECK_GL_ERROR
+    #endif
 }
 
-// 读缓冲区设置
 void glReadBuffer(GLenum src) {
+    #if DEBUG
+    LOG_D("glReadBuffer: %d", src);
+    #endif
+    
     if (current_read_fbo != 0 && src >= GL_COLOR_ATTACHMENT0 &&
         src < GL_COLOR_ATTACHMENT0 + MAX_COLOR_ATTACHMENTS) {
         auto& fbo = framebuffers[current_read_fbo];
@@ -184,17 +212,33 @@ void glReadBuffer(GLenum src) {
     } else {
         GLES.glReadBuffer(src);
     }
+    #if DEBUG
+    CHECK_GL_ERROR
+    #endif
 }
 
-// 帧缓冲状态检查
 GLenum glCheckFramebufferStatus(GLenum target) {
     GLenum status = GLES.glCheckFramebufferStatus(target);
-    return (global_settings.ignore_error == IgnoreErrorLevel::Full && status != GL_FRAMEBUFFER_COMPLETE)
-           ? GL_FRAMEBUFFER_COMPLETE : status;
+    
+    #if DEBUG
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOG_D("Framebuffer incomplete: status=0x%X", status);
+    }
+    #endif
+    
+    if (global_settings.ignore_error == IgnoreErrorLevel::Full && 
+        status != GL_FRAMEBUFFER_COMPLETE) {
+        return GL_FRAMEBUFFER_COMPLETE;
+    }
+    
+    return status;
 }
 
-// 清理函数
 void cleanup_framebuffers() {
+    #if DEBUG
+    LOG_D("Cleaning up framebuffers");
+    #endif
+    
     for (auto& fbo : framebuffers) {
         if (fbo.color_attachments) {
             delete[] fbo.color_attachments;
@@ -202,4 +246,7 @@ void cleanup_framebuffers() {
         }
     }
     framebuffers.clear();
+    
+    current_draw_fbo = 0;
+    current_read_fbo = 0;
 }

@@ -1,7 +1,3 @@
-//
-// Created by BZLZHH on 2025/1/28.
-//
-
 #include "getter.h"
 #include "buffer.h"
 #include <string>
@@ -17,12 +13,11 @@
 
 Version GLVersion;
 
-// 小工具函数，inline减少调用消耗
+// 小工具函数
 inline int count_spaces(const std::string& str) {
     return std::count(str.begin(), str.end(), ' ');
 }
 
-// 用 string_view 和更高效的分割
 inline std::vector<std::string> split(const std::string& str, char delim) {
     std::vector<std::string> tokens;
     size_t start = 0, end;
@@ -41,12 +36,13 @@ void glGetIntegerv(GLenum pname, GLint *params) {
     LOG()
     LOG_D("glGetIntegerv, pname: %s", glEnumToString(pname))
 #endif
+    
     switch (pname) {
         case GL_NUM_EXTENSIONS + GL_BACKEND_GETTER_MG:
             GLES.glGetIntegerv(pname - GL_BACKEND_GETTER_MG, params);
             return;
         case GL_CONTEXT_PROFILE_MASK:
-            (*params) = GL_CONTEXT_CORE_PROFILE_BIT;
+            *params = GL_CONTEXT_CORE_PROFILE_BIT;
             break;
         case GL_NUM_EXTENSIONS: {
             static GLint num_extensions = -1;
@@ -59,26 +55,24 @@ void glGetIntegerv(GLenum pname, GLint *params) {
                     num_extensions = 0;
                 }
             }
-            (*params) = num_extensions;
+            *params = num_extensions;
             break;
         }
         case GL_MAJOR_VERSION:
-            (*params) = GLVersion.Major;
+            *params = GLVersion.Major;
             break;
         case GL_MINOR_VERSION:
-            (*params) = GLVersion.Minor;
+            *params = GLVersion.Minor;
             break;
         case GL_MAX_TEXTURE_IMAGE_UNITS: {
             int es_params = 16;
             GLES.glGetIntegerv(pname, &es_params);
-            CHECK_GL_ERROR
-            (*params) = es_params * 2;
+            *params = es_params * 2;
             break;
         }
-        case GL_CONTEXT_FLAGS: {
-            (*params) = GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT | GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT | GL_CONTEXT_FLAG_NO_ERROR_BIT;
+        case GL_CONTEXT_FLAGS:
+            *params = GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT | GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT | GL_CONTEXT_FLAG_NO_ERROR_BIT;
             break;
-        }
         case GL_ARRAY_BUFFER_BINDING:
         case GL_ATOMIC_COUNTER_BUFFER_BINDING:
         case GL_COPY_READ_BUFFER_BINDING:
@@ -91,29 +85,25 @@ void glGetIntegerv(GLenum pname, GLint *params) {
         case GL_SHADER_STORAGE_BUFFER_BINDING:
         case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
         case GL_UNIFORM_BUFFER_BINDING:
-            (*params) = (int) find_bound_buffer(pname);
-#if DEBUG
-            LOG_D("  -> %d",*params)
-#endif
+            *params = static_cast<GLint>(find_bound_buffer(pname));
             break;
         case GL_VERTEX_ARRAY_BINDING:
-            (*params) = (int) find_bound_array();
+            *params = static_cast<GLint>(find_bound_array());
             break;
         default:
             GLES.glGetIntegerv(pname, params);
-#if DEBUG
-            LOG_D("  -> %d",*params)
-#endif
-            CHECK_GL_ERROR
     }
+    
+#if DEBUG
+    LOG_D("  -> %d", *params)
+    CHECK_GL_ERROR
+#endif
 }
 
 GLenum glGetError() {
 #if DEBUG
     LOG()
-#endif
     GLenum err = GLES.glGetError();
-#if DEBUG
     if (err != GL_NO_ERROR) {
         LOG_W("glGetError\n -> %d", err)
         LOG_W("Now try to cheat.")
@@ -122,8 +112,9 @@ GLenum glGetError() {
     return GL_NO_ERROR;
 }
 
-// 用静态变量一次性缓存
+// 扩展列表缓存
 static std::string es_ext;
+
 std::string GetExtensionsList() {
     return es_ext;
 }
@@ -137,30 +128,19 @@ void InitGLESBaseExtensions() {
         extensions.push_back("GL_MG_settings_string_dump");
     }
 
-    const char* base_exts[] = {"GL_ARB_fragment_program",
-                               "GL_ARB_vertex_buffer_object",
-                               "GL_ARB_vertex_array_object",
-                               "GL_ARB_vertex_buffer",
-                               "GL_EXT_vertex_array",
-                               "GL_ARB_ES2_compatibility",
-                               "GL_ARB_ES3_compatibility",
-                               "GL_EXT_packed_depth_stencil",
-                               "GL_EXT_depth_texture",
-                               "GL_ARB_depth_texture",
-                               "GL_ARB_shading_language_100",
-                               "GL_ARB_imaging",
-                               "GL_ARB_draw_buffers_blend",
-                               "OpenGL15",
-                               "GL_ARB_shader_storage_buffer_object",
-                               "GL_ARB_shader_image_load_store",
-                               "GL_ARB_clear_texture",
-                               "GL_ARB_get_program_binary",
-                               "GL_ARB_separate_shader_objects",
-                               "GL_ARB_multi_bind",
-                               "GL_KHR_no_error"};
+    const char* base_exts[] = {
+        "GL_ARB_fragment_program", "GL_ARB_vertex_buffer_object", "GL_ARB_vertex_array_object",
+        "GL_ARB_vertex_buffer", "GL_EXT_vertex_array", "GL_ARB_ES2_compatibility",
+        "GL_ARB_ES3_compatibility", "GL_EXT_packed_depth_stencil", "GL_EXT_depth_texture",
+        "GL_ARB_depth_texture", "GL_ARB_shading_language_100", "GL_ARB_imaging",
+        "GL_ARB_draw_buffers_blend", "OpenGL15", "GL_ARB_shader_storage_buffer_object",
+        "GL_ARB_shader_image_load_store", "GL_ARB_clear_texture", "GL_ARB_get_program_binary",
+        "GL_ARB_separate_shader_objects", "GL_ARB_multi_bind", "GL_KHR_no_error"
+    };
 
     extensions.insert(extensions.end(), std::begin(base_exts), std::end(base_exts));
 
+    // 保留原始随机化逻辑
     if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) {
         for (int i = extensions.size() - 1; i > 0; --i) {
             int j = rand() % (i + 1);
@@ -180,40 +160,36 @@ void AppendExtension(const char* ext) {
     es_ext += ' ';
 }
 
-// 用更高效的string_view和查找
 inline std::string getBeforeThirdSpace(const std::string& str) {
     int spaceCount = 0;
     size_t endPos = 0;
     for (size_t i = 0; i < str.length(); ++i) {
         if (str[i] == ' ') {
-            spaceCount++;
-            if (spaceCount == 3) {
+            if (++spaceCount == 3) {
                 endPos = i;
                 break;
             }
         }
     }
-    if (spaceCount < 3) endPos = str.length();
     return str.substr(0, endPos);
 }
 
-// 静态缓存gpuName，减少重复分配
+// GPU名称缓存
 std::string getGpuName() {
     static std::string lastGpuName;
     if (!lastGpuName.empty()) return lastGpuName;
-    std::string gpuName = std::string((char *)GLES.glGetString(GL_RENDERER));
+    
+    std::string gpuName = reinterpret_cast<const char*>(GLES.glGetString(GL_RENDERER));
     if (gpuName.empty()) return "<unknown>";
 
     if (gpuName.find("MetalANGLE, ANGLE") != std::string::npos) {
-        if (gpuName.length() < 25) {
+        if (gpuName.length() >= 25) {
+            std::string gpu = gpuName.substr(23, gpuName.length() - 24);
+            lastGpuName = gpu + " | MetalANGLE | Metal";
+        } else {
             lastGpuName = gpuName;
-            return lastGpuName;
         }
-        std::string gpu = gpuName.substr(23, gpuName.length() - 24);
-        lastGpuName = gpu + " | MetalANGLE | Metal";
-        return lastGpuName;
-    }
-    if (gpuName.rfind("ANGLE", 0) == 0 && gpuName.find("Vulkan") != std::string::npos) {
+    } else if (gpuName.rfind("ANGLE", 0) == 0 && gpuName.find("Vulkan") != std::string::npos) {
         size_t firstParen = gpuName.find('(');
         size_t secondParen = gpuName.find('(', firstParen + 1);
         size_t lastParen = gpuName.rfind('(');
@@ -222,14 +198,15 @@ std::string getGpuName() {
         size_t vulkanEnd = gpuName.find(' ', vulkanStart + 7);
         std::string vulkanVersion = gpuName.substr(vulkanStart + 7, vulkanEnd - (vulkanStart + 7));
         lastGpuName = gpu + " | ANGLE | Vulkan " + vulkanVersion;
-        return lastGpuName;
+    } else {
+        lastGpuName = gpuName;
     }
-    lastGpuName = gpuName;
+    
     return lastGpuName;
 }
 
 void set_es_version() {
-    std::string ESVersionStr = getBeforeThirdSpace(std::string((const char*)GLES.glGetString(GL_VERSION)));
+    std::string ESVersionStr = getBeforeThirdSpace(reinterpret_cast<const char*>(GLES.glGetString(GL_VERSION)));
     int major = 0, minor = 0;
     if (sscanf(ESVersionStr.c_str(), "OpenGL ES %d.%d", &major, &minor) == 2) {
         hardware->es_version = major * 100 + minor * 10;
@@ -245,25 +222,28 @@ void set_es_version() {
 }
 
 std::string getGLESName() {
-    return getBeforeThirdSpace(std::string((char*)GLES.glGetString(GL_VERSION)));
+    return getBeforeThirdSpace(reinterpret_cast<const char*>(GLES.glGetString(GL_VERSION)));
 }
 
+// 字符串缓存
 static std::string rendererString;
 static std::string vendorString;
 static std::string versionString;
 static std::string shadingLangString;
 
-const GLubyte * glGetString( GLenum name ) {
+const GLubyte * glGetString(GLenum name) {
 #if DEBUG
     LOG()
     LOG_D("glGetString, %s", glEnumToString(name))
 #endif
+    
     switch (name) {
-        case GL_VENDOR: {
-            if(vendorString.empty()) {
+        case GL_VENDOR:
+            if (vendorString.empty()) {
                 if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
                     vendorString = "Swung0x48, BZLZHH, Tungsten, Uniaball";
                 } else {
+                    // 保留原始随机逻辑
                     const char choices[] = "AINM";
                     vendorString = choices[rand() % 4];
 
@@ -277,9 +257,9 @@ const GLubyte * glGetString( GLenum name ) {
                     vendorString += GenerateRandomString(randStrOpts);
                 }
             }
-            return (const GLubyte*)vendorString.c_str();
-        }
-        case GL_VERSION: {
+            return reinterpret_cast<const GLubyte*>(vendorString.c_str());
+            
+        case GL_VERSION:
             if (versionString.empty()) {
                 versionString = GLVersion.toString();
                 if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
@@ -289,7 +269,7 @@ const GLubyte * glGetString( GLenum name ) {
                         Version defaultVersion = Version(DEFAULT_GL_VERSION);
                         versionString += " §4§l(" + defaultVersion.toString() + ") DesktopGlues§r ";
                     }
-
+                    
                     versionString += std::to_string(MAJOR) + "." + std::to_string(MINOR) + "." + std::to_string(REVISION);
 #if PATCH != 0
                     versionString += "." + std::to_string(PATCH);
@@ -307,6 +287,7 @@ const GLubyte * glGetString( GLenum name ) {
 #endif
                     versionString += VERSION_SUFFIX;
                 } else {
+                    // 保留原始随机逻辑
                     const char choices[] = "AIN";
                     versionString += " ";
                     versionString += choices[rand() % 3];
@@ -328,15 +309,14 @@ const GLubyte * glGetString( GLenum name ) {
                                      GenerateRandomString(randStrOpts2);
                 }
             }
-            return (const GLubyte*)versionString.c_str();
-        }
-        case GL_RENDERER: {
+            return reinterpret_cast<const GLubyte*>(versionString.c_str());
+            
+        case GL_RENDERER:
             if (rendererString.empty()) {
                 if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
-                    std::string gpuName = getGpuName();
-                    std::string glesName = getGLESName();
-                    rendererString = gpuName + " | " + glesName;
+                    rendererString = getGpuName() + " | " + getGLESName();
                 } else {
+                    // 保留原始随机逻辑
                     const char choices[] = "AINM";
                     rendererString = choices[rand() % 4];
 
@@ -362,20 +342,16 @@ const GLubyte * glGetString( GLenum name ) {
                     }
                 }
             }
-            return (const GLubyte*)rendererString.c_str();
-        }
-        case GL_SHADING_LANGUAGE_VERSION: {
+            return reinterpret_cast<const GLubyte*>(rendererString.c_str());
+            
+        case GL_SHADING_LANGUAGE_VERSION:
             if (shadingLangString.empty()) {
-                std::string baseVer;
-                if (hardware->es_version < 310) {
-                    baseVer = "4.00";
-                } else {
-                    baseVer = "4.60";
-                }
-
+                std::string baseVer = (hardware->es_version < 310) ? "4.00" : "4.60";
+                
                 if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) {
                     shadingLangString = baseVer;
-
+                    
+                    // 保留原始随机逻辑
                     int junkCount = rand() % 2 + 1;
                     for (int i = 0; i < junkCount; ++i) {
                         shadingLangString += " ";
@@ -392,21 +368,20 @@ const GLubyte * glGetString( GLenum name ) {
                 }
             }
             return reinterpret_cast<const GLubyte*>(shadingLangString.c_str());
-        }
-        case GL_EXTENSIONS: {
-            static std::string cached;
-            cached = GetExtensionsList();
-            return (const GLubyte*)cached.c_str();
-        }
-        case GL_SETTINGS_MG: {
+            
+        case GL_EXTENSIONS:
+            return reinterpret_cast<const GLubyte*>(GetExtensionsList().c_str());
+            
+        case GL_SETTINGS_MG:
             if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) 
                 return GLES.glGetString(name);
-
+                
             static char* settings_string = nullptr;
+            if (settings_string) free(settings_string);
             std::string tmp = dump_settings_string("  ");
             settings_string = strdup(tmp.c_str());
             return reinterpret_cast<const GLubyte*>(settings_string);
-        }
+            
         case GL_VERSION + GL_BACKEND_GETTER_MG:
         case GL_VENDOR + GL_BACKEND_GETTER_MG:
         case GL_RENDERER + GL_BACKEND_GETTER_MG:
@@ -416,26 +391,24 @@ const GLubyte * glGetString( GLenum name ) {
                 return GLES.glGetString(name - GL_BACKEND_GETTER_MG);
             else
                 return GLES.glGetString(name);
+                
         default:
             return GLES.glGetString(name);
     }
 }
 
-// 用 vector 缓存分割结果，避免重复分割和malloc/free
+// 字符串索引缓存
 const GLubyte * glGetStringi(GLenum name, GLuint index) {
 #if DEBUG
     LOG()
 #endif
+    
     struct StringCache {
         GLenum name;
         std::vector<std::string> parts;
     };
-    static std::vector<StringCache> caches = {
-        {GL_EXTENSIONS, {}},
-        {GL_VENDOR, {}},
-        {GL_VERSION, {}},
-        {GL_SHADING_LANGUAGE_VERSION, {}}
-    };
+    
+    static std::vector<StringCache> caches;
     static bool initialized = false;
     
     if (name == GL_EXTENSIONS + GL_BACKEND_GETTER_MG && 
@@ -444,26 +417,23 @@ const GLubyte * glGetStringi(GLenum name, GLuint index) {
     }
 
     if (!initialized) {
+        caches = {
+            {GL_EXTENSIONS, {}},
+            {GL_VENDOR, {}},
+            {GL_VERSION, {}},
+            {GL_SHADING_LANGUAGE_VERSION, {}}
+        };
+        
         for (auto &cache : caches) {
             std::string str;
             switch (cache.name) {
                 case GL_VENDOR:
-                    if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
-                        str = "Swung0x48, BZLZHH, Tungsten, Uniaball";
-                    } else {
-                        const char choices[] = "AINM";
-                        str = choices[rand() % 4];
-                        RandomStringOptions randStrOpts;
-                        randStrOpts.includeDigits = false;
-                        randStrOpts.minLength = 3;
-                        randStrOpts.maxLength = 8;
-                        randStrOpts.includeLowercase = false;
-                        randStrOpts.includeUppercase = false;
-                        randStrOpts.customChars = "IMenaNtMseAVlD";
-                        str += GenerateRandomString(randStrOpts);
-                    }
+                    str = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
                     cache.parts = split(str, ',');
-                    for (auto& s : cache.parts) s.erase(0, s.find_first_not_of(" "));
+                    for (auto& s : cache.parts) {
+                        size_t start = s.find_first_not_of(" ");
+                        if (start != std::string::npos) s = s.substr(start);
+                    }
                     break;
                 case GL_VERSION:
                     str = reinterpret_cast<const char*>(glGetString(GL_VERSION));
@@ -473,15 +443,9 @@ const GLubyte * glGetStringi(GLenum name, GLuint index) {
                     str = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
                     cache.parts = split(str, ' ');
                     break;
-                case GL_EXTENSIONS: {
-                    const GLubyte* ext_str = glGetString(GL_EXTENSIONS);
-                    if (ext_str) {
-                        str = (const char*)ext_str;
-                        cache.parts = split(str, ' ');
-                    }
-                    break;
-                }
-                default:
+                case GL_EXTENSIONS:
+                    str = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+                    cache.parts = split(str, ' ');
                     break;
             }
         }
@@ -490,10 +454,13 @@ const GLubyte * glGetStringi(GLenum name, GLuint index) {
     
     for (auto &cache : caches) {
         if (cache.name == name) {
-            if (index >= cache.parts.size()) return nullptr;
-            return (const GLubyte*)cache.parts[index].c_str();
+            if (index < cache.parts.size()) {
+                return reinterpret_cast<const GLubyte*>(cache.parts[index].c_str());
+            }
+            return nullptr;
         }
     }
+    
     return GLES.glGetStringi(name, index);
 }
 
@@ -503,8 +470,10 @@ void glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
 #endif
     if (GLES.glGetQueryObjectivEXT) {
         GLES.glGetQueryObjectivEXT(id, pname, params);
-        CHECK_GL_ERROR
     }
+#if DEBUG
+    CHECK_GL_ERROR
+#endif
 }
 
 void glGetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params) {
@@ -513,6 +482,8 @@ void glGetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params) {
 #endif
     if (GLES.glGetQueryObjecti64vEXT) {
         GLES.glGetQueryObjecti64vEXT(id, pname, params);
-        CHECK_GL_ERROR
     }
+#if DEBUG
+    CHECK_GL_ERROR
+#endif
 }
