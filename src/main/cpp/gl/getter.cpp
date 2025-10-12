@@ -243,7 +243,6 @@ const GLubyte * glGetString(GLenum name) {
                 if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
                     vendorString = "Swung0x48, BZLZHH, Tungsten, Uniaball";
                 } else {
-                    // 保留原始随机逻辑
                     const char choices[] = "AINM";
                     vendorString = choices[rand() % 4];
 
@@ -287,7 +286,6 @@ const GLubyte * glGetString(GLenum name) {
 #endif
                     versionString += VERSION_SUFFIX;
                 } else {
-                    // 保留原始随机逻辑
                     const char choices[] = "AIN";
                     versionString += " ";
                     versionString += choices[rand() % 3];
@@ -316,7 +314,6 @@ const GLubyte * glGetString(GLenum name) {
                 if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
                     rendererString = getGpuName() + " | " + getGLESName();
                 } else {
-                    // 保留原始随机逻辑
                     const char choices[] = "AINM";
                     rendererString = choices[rand() % 4];
 
@@ -369,10 +366,17 @@ const GLubyte * glGetString(GLenum name) {
             }
             return reinterpret_cast<const GLubyte*>(shadingLangString.c_str());
             
-        case GL_EXTENSIONS:
-            return reinterpret_cast<const GLubyte*>(GetExtensionsList().c_str());
+        case GL_EXTENSIONS: {
+#if defined(__APPLE__)
+        static std::string* appleCache = new std::string(GetExtensionsList());
+        return reinterpret_cast<const GLubyte*>(appleCache->c_str());
+#else
+        static const std::string& cached = GetExtensionsList();
+        return reinterpret_cast<const GLubyte*>(cached.c_str());
+#endif
+        }
             
-        case GL_SETTINGS_MG: {  // 添加作用域块
+        case GL_SETTINGS_MG: {
             if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) 
                 return GLES.glGetString(name);
                 
