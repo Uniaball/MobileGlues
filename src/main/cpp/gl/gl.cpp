@@ -121,17 +121,13 @@ void glClear(GLbitfield mask) {
 
     INIT_CHECK_GL_ERROR
 
-    // 先执行一次清除操作
-    GLES.glClear(mask);
-    CHECK_GL_ERROR_NO_INIT
-
-    // 检查是否需要特殊处理深度清除
+    // 深度清除特殊处理
     if (global_settings.angle == AngleMode::Enabled &&
         mask == GL_DEPTH_BUFFER_BIT && 
         std::abs(currentDepthValue - 1.0f) <= 0.001f &&
         framebuffers[current_draw_fbo].color_attachments_all_none) {
         
-        LOG_D("doing depth workaround");
+        LOG_D("Applying depth clear workaround");
         
         if (global_settings.angle_depth_clear_fix_mode == AngleDepthClearFixMode::Mode1) {
             DrawDepthClearTri();
@@ -140,8 +136,9 @@ void glClear(GLbitfield mask) {
             const GLfloat clear_depth_value = 1.0f;
             GLES.glClearBufferfv(GL_DEPTH, 0, &clear_depth_value);
         }
-        
-        // 特殊处理后再次清除
+    } 
+    else {
+        // 标准清除路径
         GLES.glClear(mask);
     }
 
