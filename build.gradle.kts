@@ -3,24 +3,18 @@ plugins {
 }
 
 android {
-    namespace = "com.swung0x48.mobileglues"
+    namespace = "top.mobilegl.mobileglues"
     compileSdk = 36
 
     defaultConfig {
         minSdk = 21
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        consumerProguardFiles("consumer-rules.pro")
         ndkVersion = "27.3.13750724"
     }
 
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
         }
         create("proguard") {
             isMinifyEnabled = true
@@ -32,7 +26,7 @@ android {
 
     externalNativeBuild {
         cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
+            path = file("MobileGlues-cpp/CMakeLists.txt")
             version = "3.22.1"
         }
     }

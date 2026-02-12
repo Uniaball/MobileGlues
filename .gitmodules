@@ -1,12 +1,18 @@
-[submodule "src/main/cpp/3rdparty/perfetto"]
-	path = src/main/cpp/3rdparty/perfetto
+[submodule "MobileGlues-cpp/3rdparty/perfetto"]
+	path = MobileGlues-cpp/3rdparty/perfetto
 	url = https://android.googlesource.com/platform/external/perfetto
-[submodule "src/main/cpp/3rdparty/xxhash"]
-	path = src/main/cpp/3rdparty/xxhash
+[submodule "MobileGlues-cpp/3rdparty/xxhash"]
+	path = MobileGlues-cpp/3rdparty/xxhash
 	url = https://github.com/stbrumme/xxhash.git
-[submodule "src/main/cpp/3rdparty/glm"]
-	path = src/main/cpp/3rdparty/glm
+[submodule "MobileGlues-cpp/3rdparty/glm"]
+	path = MobileGlues-cpp/3rdparty/glm
 	url = https://github.com/g-truc/glm.git
-[submodule "src/main/cpp/include/FastSTL"]
-	path = src/main/cpp/include/FastSTL
+[submodule "MobileGlues-cpp/include/FastSTL"]
+	path = MobileGlues-cpp/include/FastSTL
 	url = https://github.com/MobileGL-Dev/FastSTL.git
+[submodule "MobileGlues-cpp/3rdparty/glslang"]
+	path = MobileGlues-cpp/3rdparty/glslang
+	url = https://github.com/KhronosGroup/glslang.git
+[submodule "MobileGlues-cpp/3rdparty/SPIRV-Cross"]
+	path = MobileGlues-cpp/3rdparty/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross.git

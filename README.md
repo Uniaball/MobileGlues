@@ -4,7 +4,7 @@ DesktopGlues，取「(on) Desktop, GL uses ES」之意，是基于 MobileGlues(h
 
 <details>
 <summary> 目前版本 </summary>
- V1.0.4·Dev
+ V1.0.5·Dev
 </details>
 
 ## License
@@ -14,7 +14,7 @@ DesktopGlues 延续 MobileGlues 的开源协议，采用 GNU LGPL-2.1 License。
 详见 "LICENSE" (https://github.com/MobileGL-Dev/MobileGlues/blob/main/LICENSE)
 
 
-# Third party components
+# Third-party components
 
 **SPIRV-Cross** by **KhronosGroup** - [Apache License 2.0](https://github.com/KhronosGroup/SPIRV-Cross/blob/master/LICENSE): [github](https://github.com/KhronosGroup/SPIRV-Cross)
 
@@ -25,3 +25,7 @@ DesktopGlues 延续 MobileGlues 的开源协议，采用 GNU LGPL-2.1 License。
 **OpenGL Mathematics (*GLM*)** by **G-Truc Creation** - [The Happy Bunny License](https://github.com/g-truc/glm/blob/master/copying.txt): [github](https://github.com/g-truc/glm)
 
 **FidelityFX-FSR** by **AMD** - [MIT License](https://github.com/GPUOpen-Effects/FidelityFX-FSR/blob/master/license.txt): [github](https://github.com/GPUOpen-Effects/FidelityFX-FSR) 
+
+**Perfetto** by **Google** - [Apache License 2.0](https://github.com/google/perfetto/blob/main/LICENSE): [github](https://github.com/google/perfetto)
+
+**xxHash** by **Yann Collet** - [BSD 2-Clause License](https://github.com/Cyan4973/xxHash/blob/dev/LICENSE): [github](https://github.com/Cyan4973/xxHash)
