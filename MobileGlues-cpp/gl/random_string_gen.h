@@ -11,10 +11,6 @@
 #include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
-<<<<<<< HEAD:src/main/cpp/gl/random_string_gen.h
-=======
-#include <string>
->>>>>>> upstream/dev:MobileGlues-cpp/gl/random_string_gen.h
 #include <format>
 
 struct RandomStringOptions {
