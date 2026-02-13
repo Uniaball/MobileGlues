@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(USE_FULL_LTO "Use full LTO instead of ThinLTO" OFF)
+
 
 # glslang & SPIRV-Cross
 set(ENABLE_RTTI                ON  CACHE BOOL "Enables RTTI (will be took by glslang)" FORCE)
@@ -50,21 +52,26 @@ if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     check_cxx_compiler_flag("-flto" HAS_LTO_CXX)
 
     if (LTOSupported OR (HAS_LTO_C AND HAS_LTO_CXX))
-    # Check ThinLTO
-    check_c_compiler_flag("-flto=thin" HAS_THINLTO_C)
-    check_cxx_compiler_flag("-flto=thin" HAS_THINLTO_CXX)
-    if (HAS_THINLTO_C AND HAS_THINLTO_CXX)
-        message(STATUS "ThinLTO supported, using -flto=thin")
+        if (USE_FULL_LTO)
+            message(STATUS "Using full LTO as requested")
+            set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+        else()
+            # Check ThinLTO
+            check_c_compiler_flag("-flto=thin" HAS_THINLTO_C)
+            check_cxx_compiler_flag("-flto=thin" HAS_THINLTO_CXX)
+            if (HAS_THINLTO_C AND HAS_THINLTO_CXX)
+                message(STATUS "ThinLTO supported, using -flto=thin")
 
-        add_compile_options(-flto=thin)
-        add_link_options(-flto=thin)
+                add_compile_options(-flto=thin)
+                add_link_options(-flto=thin)
+            else()
+                # ThinLTO is not supported
+                message(STATUS "ThinLTO not available, fallback to full LTO")
+                set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+            endif()
+        endif()
     else()
-        # ThinLTO is not supported
-        message(STATUS "ThinLTO not available, fallback to CMAKE IPO")
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-    endif()
-    else()
-    message(STATUS "IPO not supported: ${LTOError}")
+        message(STATUS "IPO not supported: ${LTOError}")
     endif()
 endif()
 
