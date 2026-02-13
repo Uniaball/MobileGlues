@@ -3,7 +3,10 @@ name: Build DesktopGlues for Android
 on:
   push:
   workflow_dispatch:
-
+  
+env:
+  USE_FULL_LTO: ON
+  
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,16 +27,25 @@ jobs:
     - name: Configure CMake
       run: |
         cd MobileGlues-cpp
-        cmake -B build \
-        -DANDROID_ABI=arm64-v8a \
-        -DANDROID_PLATFORM=android-29 \
-        -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-        -DANDROID_TOOLCHAIN=clang \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DUSE_FULL_LTO=OFF \
-        -DCMAKE_C_FLAGS="-flto" \
-        -DCMAKE_CXX_FLAGS="-flto" \
-        -DCMAKE_EXE_LINKER_FLAGS="-flto"
+        if [ "$USE_FULL_LTO" = "ON" ]; then
+          cmake -B build \
+          -DANDROID_ABI=arm64-v8a \
+          -DANDROID_PLATFORM=android-29 \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+          -DANDROID_TOOLCHAIN=clang \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_FLAGS="-w -g -std=gnu99 -funwind-tables -fvisibility=hidden -flto" \
+          -DCMAKE_CXX_FLAGS="-w -fvisibility=hidden -funwind-tables -g -D_THREAD_SAFE -fPIC -flto" \
+          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -flto"
+          
+        else
+          cmake -B build \
+          -DANDROID_ABI=arm64-v8a \
+          -DANDROID_PLATFORM=android-29 \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+          -DANDROID_TOOLCHAIN=clang \
+          -DCMAKE_BUILD_TYPE=Release 
+        fi
         
     - name: Build
       run: cmake --build MobileGlues-cpp/build --config Release --target desktopglues --parallel $(nproc)
