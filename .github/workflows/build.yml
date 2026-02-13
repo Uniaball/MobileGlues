@@ -27,7 +27,7 @@ jobs:
         -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
         -DANDROID_TOOLCHAIN=clang \
         -DCMAKE_BUILD_TYPE=Release \
-        -DUSE_FULL_FTO=ON
+        -DUSE_FULL_LTO=ON
         
     - name: Build
       run: cmake --build MobileGlues-cpp/build --config Release --target desktopglues --parallel $(nproc)
