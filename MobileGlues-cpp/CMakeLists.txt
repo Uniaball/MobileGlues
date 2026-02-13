@@ -54,7 +54,9 @@ if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     if (LTOSupported OR (HAS_LTO_C AND HAS_LTO_CXX))
         if (USE_FULL_LTO)
             message(STATUS "Using full LTO as requested")
-            set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+            add_compile_options(-flto)
+            add_link_options(-flto)
+
         else()
             # Check ThinLTO
             check_c_compiler_flag("-flto=thin" HAS_THINLTO_C)
