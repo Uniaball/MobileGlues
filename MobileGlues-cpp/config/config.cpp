@@ -42,7 +42,6 @@ int check_path() {
         char* var = getenv("MG_DIR_PATH");
         is_custom_mg_dir = var ? true : false;
         mg_directory_path = var ? strdup(var) : DEFAULT_MG_DIRECTORY_PATH;
-        unsetenv("MG_DIR_PATH");
     }
     config_file_path = concatenate(mg_directory_path, "/config.json");
     log_file_path = concatenate(mg_directory_path, "/latest.log");
