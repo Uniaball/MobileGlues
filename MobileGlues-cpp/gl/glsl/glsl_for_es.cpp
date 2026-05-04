@@ -435,11 +435,29 @@ static void inject_textureQueryLod(std::string& glsl) {
     const std::string textureQueryLodImpl = R"(
 #define textureQueryLod mg_textureQueryLod
 vec2 mg_textureQueryLod(sampler2D tex, vec2 uv) {
-    vec2 texSizeF = vec2(textureSize(tex, 0));
-    vec2 dFdx_uv = dFdx(uv * texSizeF);
-    vec2 dFdy_uv = dFdy(uv * texSizeF);
-    float maxDerivative = max(length(dFdx_uv), length(dFdy_uv));
-    float lod = log2(maxDerivative);
+    vec4 _ = textureLod(tex, uv, 0.0);
+    vec2 tSize = vec2(textureSize(tex, 0));
+    vec2 dx = dFdx(uv * tSize);
+    vec2 dy = dFdy(uv * tSize);
+    float dmax = max(length(dx), length(dy));
+    float lod = log2(max(dmax, 1e-6));
+    return vec2(lod);
+}
+vec2 mg_textureQueryLod(sampler2DShadow tex, vec2 uv) {
+    float _ = textureLod(tex, vec3(uv, 0.0), 0.0);
+    vec2 tSize = vec2(textureSize(tex, 0));
+    vec2 dx = dFdx(uv * tSize);
+    vec2 dy = dFdy(uv * tSize);
+    float dmax = max(length(dx), length(dy));
+    float lod = log2(max(dmax, 1e-6));
+    return vec2(lod);
+}
+vec2 mg_textureQueryLod(samplerCube tex, vec3 dir) {
+    vec4 _ = textureLod(tex, dir, 0.0);
+    vec3 dx = dFdx(dir);
+    vec3 dy = dFdy(dir);
+    float dmax = max(length(dx), length(dy)) * 512.0;
+    float lod = log2(max(dmax, 1e-6));
     return vec2(lod);
 }
 )";
