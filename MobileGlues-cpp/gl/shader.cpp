@@ -6,6 +6,7 @@
 // End of Source File Header
 
 #include <cctype>
+#include <cstdio>      // 新增：用于文件写入调试
 #include "shader.h"
 #include <GL/gl.h>
 #include "log.h"
@@ -50,16 +51,20 @@ bool check_if_sampler_buffer_used(std::string str) {
     return str.find("samplerBuffer") != std::string::npos;
 }
 
+// 检查 GLSL 源码是否携带合法的 ESSL 版本声明
 static bool has_valid_essl_version(const std::string& src) {
     size_t pos = src.find("#version");
     if (pos == std::string::npos) {
+        // 无版本声明可能是 GLSL 100，视为合法
         return true;
     }
     size_t end = src.find('\n', pos);
     std::string line = src.substr(pos, end - pos);
+    // ESSL 版本行一定包含 "es" 关键字
     return line.find("es") != std::string::npos;
 }
 
+// 生成一个绝对合法的 ESSL 占位着色器，根据类型适配
 static std::string create_safe_placeholder(GLenum shaderType, int esVersion) {
     std::string ver = (esVersion >= 320) ? "#version 320 es\n" : "#version 300 es\n";
     std::string prec = "precision mediump float;\n";
@@ -68,6 +73,7 @@ static std::string create_safe_placeholder(GLenum shaderType, int esVersion) {
     } else if (shaderType == GL_FRAGMENT_SHADER) {
         return ver + prec + "void main() { }";
     } else {
+        // 其他类型（compute/geometry）极少见，给空 main
         return ver + prec + "void main() { }";
     }
 }
@@ -78,6 +84,7 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
     shaderInfo.converted = "";
     shaderInfo.frag_data_changed = 0;
     
+    // 提前获取着色器类型，以便生成安全的占位对象
     GLint shaderType = GL_FRAGMENT_SHADER;
     GLES.glGetShaderiv(shader, GL_SHADER_TYPE, &shaderType);
     
@@ -119,11 +126,13 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         
         if (essl_src.empty()) {
             LOG_E("Failed to convert shader %d.", shader)
+            // 不再直接 return，继续向下转为安全占位
         } else {
             LOG_D("\n[INFO] [Shader] Converted Shader source: \n%s", essl_src.c_str())
         }
     }
     
+    // 终极安全检查：任何最终要送给 GLES 的源码必须是合法 ESSL
     if (essl_src.empty() || !has_valid_essl_version(essl_src)) {
         if (!essl_src.empty()) {
             LOG_E("[DesktopGlues] Shader %d: 转换结果仍包含桌面 #version，替换为安全占位", shader);
@@ -131,9 +140,27 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
             LOG_E("[DesktopGlues] Shader %d: 转换产出为空，使用安全占位防止空白屏幕", shader);
         }
         essl_src = create_safe_placeholder(shaderType, hardware->es_version);
-        shaderInfo.id = 0;
+        shaderInfo.id = 0;  // 占位不作为有效原始 shader
     }
     
+    // ───── 临时调试转储：将所有转换后的着色器写入 /sdcard/ ─────
+    static int dump_counter = 0;
+    const char* type_str = (shaderType == GL_VERTEX_SHADER) ? "vert" : 
+                           (shaderType == GL_FRAGMENT_SHADER) ? "frag" : "other";
+    char dump_path[256];
+    snprintf(dump_path, sizeof(dump_path), "/sdcard/dlg_shader_%d_%s.glsl", 
+             dump_counter++, type_str);
+    FILE* fp = fopen(dump_path, "w");
+    if (fp) {
+        fputs(essl_src.c_str(), fp);
+        fclose(fp);
+        LOG_D("[DesktopGlues] Dumped converted shader to %s", dump_path);
+    } else {
+        LOG_W("[DesktopGlues] Failed to dump shader to %s", dump_path);
+    }
+    // ───────────────────────────────────────────────────────────
+    
+    // 统一出口：只调用一次 GLES.glShaderSource，且只传单个拼接好的字符串
     if (!essl_src.empty()) {
         shaderInfo.id = shader;
         shaderInfo.converted = essl_src;
@@ -143,6 +170,7 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         if (hardware->emulate_texture_buffer)
             shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
     } else {
+        // 极意外情况，绝不应该发生
         LOG_E("Critical: no shader source supplied for shader %d", shader);
     }
     
