@@ -188,7 +188,7 @@ inline std::string forceSupporterOutput(const std::string& glslCode) {
     return result;
 }
 
-// 完全重写的 layout binding/set 清理函数，使用迭代器代替回调
+// 修复版 removeLayoutBinding，使用迭代器代替回调，兼容 NDK
 inline std::string removeLayoutBinding(const std::string& glslCode) {
     static const std::regex layoutBlock(R"(layout\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\))", std::regex::optimize);
     std::string result;
@@ -218,7 +218,6 @@ inline std::string removeLayoutBinding(const std::string& glslCode) {
         if (!inside.empty()) {
             result.append("layout(" + inside + ")");
         }
-        // 如果 inside 为空，整个 layout() 被移除，不添加任何内容
         lastPos = it->position() + it->length();
     }
     result.append(glslCode, lastPos, glslCode.length() - lastPos);
@@ -559,7 +558,8 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
     inject_temporal_filter(ret);
     if (!g_gles_caps.GL_EXT_texture_query_lod) inject_textureQueryLod(ret);
     inject_mg_macro_definition(ret);
-    if (hardware->emulate_texture_buffer) process_sampler_buffer(ret);
+    // 修复：无条件调用 process_sampler_buffer，它内部会检查是否需要处理
+    process_sampler_buffer(ret);
     *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
     return ret;
 }
@@ -599,13 +599,15 @@ std::vector<unsigned int> glsl_to_spirv(GLenum shader_type, int glsl_version, co
     shader.setAutoMapBindings(true);
     TBuiltInResource TBuiltInResource_resources = InitResources();
     if (!shader.parse(&TBuiltInResource_resources, glsl_version, true, EShMsgDefault)) {
-        LOG_D("GLSL Compiling ERROR: \n%s", shader.getInfoLog())
+        // 强制输出编译错误，便于调试
+        LOG_W_FORCE("GLSL Compiling ERROR: \n%s", shader.getInfoLog())
         errc = -1; return {};
     }
     LOG_D("GLSL Compiled.")
     glslang::TProgram program; program.addShader(&shader);
     if (!program.link(EShMsgDefault)) {
-        LOG_D("Shader Linking ERROR: %s", program.getInfoLog())
+        // 强制输出链接错误
+        LOG_W_FORCE("Shader Linking ERROR: %s", program.getInfoLog())
         errc = -1; return {};
     }
     LOG_D("Shader Linked.")
