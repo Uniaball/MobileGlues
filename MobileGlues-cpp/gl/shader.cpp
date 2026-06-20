@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 // End of Source File Header
 
-#include <cstdio>
+#include <cctype>
 #include "shader.h"
 #include <GL/gl.h>
 #include "log.h"
@@ -50,43 +50,18 @@ bool check_if_sampler_buffer_used(std::string str) {
     return str.find("samplerBuffer") != std::string::npos;
 }
 
-// 检查 ESSL 版本声明是否合法（必须包含 "es"）
-static bool has_valid_essl_version(const std::string& src) {
-    size_t pos = src.find("#version");
-    if (pos == std::string::npos) {
-        // 没有版本声明，可能是 GLSL 100，视为合法
-        return true;
-    }
-    size_t end = src.find('\n', pos);
-    std::string line = src.substr(pos, end - pos);
-    return line.find("es") != std::string::npos;
-}
-
-// 当转换彻底失败时使用的最小安全占位
-static std::string create_safe_placeholder(GLenum shaderType, int esVersion) {
-    std::string ver = (esVersion >= 320) ? "#version 320 es\n" : "#version 300 es\n";
-    std::string prec = "precision mediump float;\n";
-    if (shaderType == GL_VERTEX_SHADER) {
-        return ver + prec + "void main() { gl_Position = vec4(0.0); }";
-    } else {
-        return ver + prec + "void main() { }";
-    }
-}
-
 void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length) {
     LOG()
     shaderInfo.id = 0;
     shaderInfo.converted = "";
     shaderInfo.frag_data_changed = 0;
-
-    GLint shaderType = GL_FRAGMENT_SHADER;
-    GLES.glGetShaderiv(shader, GL_SHADER_TYPE, &shaderType);
-
+    
     size_t l = 0;
     for (int i = 0; i < count; i++) l += (length && length[i] >= 0) ? length[i] : strlen(string[i]);
-
+    
     std::string glsl_src, essl_src;
     glsl_src.reserve(l + 1);
+    
     if (length) {
         for (int i = 0; i < count; i++) {
             if (length[i] >= 0) glsl_src += std::string_view(string[i], length[i]);
@@ -97,9 +72,9 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
             glsl_src += string[i];
         }
     }
-
+    
     bool is_sampler_buffer_emulated = hardware->emulate_texture_buffer && check_if_sampler_buffer_used(glsl_src);
-
+    
     if (is_direct_shader(glsl_src.c_str())) {
         LOG_D("[INFO] [Shader] Direct shader source: ")
         LOG_D("%s", glsl_src.c_str())
@@ -108,57 +83,56 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         int glsl_version = getGLSLVersion(glsl_src.c_str());
         LOG_D("[INFO] [Shader] Shader source: ")
         LOG_D("%s", glsl_src.c_str())
-
+        
+        GLint shaderType;
+        GLES.glGetShaderiv(shader, GL_SHADER_TYPE, &shaderType);
+        
         int return_code = 0;
         essl_src = GLSLtoGLSLES(glsl_src.c_str(), shaderType, hardware->es_version, glsl_version, return_code);
-
+        
         if (return_code == 1) {
+            // atomicCounterEmulated
             shader_map_is_atomic_counter_emulated[shader] = true;
             LOG_D("[INFO] [Shader] Atomic counter emulated in shader %d", shader)
         }
-
-        // ★ 诊断核心：转换失败时，将原始桌面 GLSL 写入文件
+        
         if (essl_src.empty()) {
-            LOG_E("Failed to convert shader %d. Writing original GLSL to /sdcard/ for analysis.", shader);
-            static int fail_counter = 0;
-            char fail_path[256];
-            snprintf(fail_path, sizeof(fail_path), "/sdcard/dlg_failed_shader_%d_%s.glsl",
-                     fail_counter++, (shaderType == GL_VERTEX_SHADER) ? "vert" : "frag");
-            FILE* fp_fail = fopen(fail_path, "w");
-            if (fp_fail) {
-                fputs(glsl_src.c_str(), fp_fail);
-                fclose(fp_fail);
-                LOG_D("Dumped failed shader to %s", fail_path);
-            } else {
-                LOG_W("Could not write failed shader to %s", fail_path);
-            }
-        } else {
-            LOG_D("\n[INFO] [Shader] Converted Shader source: \n%s", essl_src.c_str())
+            LOG_E("Failed to convert shader %d.", shader)
+            return;
         }
+        
+        LOG_D("\n[INFO] [Shader] Converted Shader source: \n%s", essl_src.c_str())
     }
-
-    // 安全检查：绝不能把非法版本声明传给驱动
-    if (essl_src.empty() || !has_valid_essl_version(essl_src)) {
-        if (!essl_src.empty()) {
-            LOG_E("[DesktopGlues] Shader %d: invalid ESSL version after conversion, using placeholder.", shader);
-        } else {
-            LOG_E("[DesktopGlues] Shader %d: empty after conversion, using placeholder.", shader);
-        }
-        essl_src = create_safe_placeholder(shaderType, hardware->es_version);
-        shaderInfo.id = 0;
-    }
-
-    // 统一出口：只调用一次 glShaderSource
+    
     if (!essl_src.empty()) {
         shaderInfo.id = shader;
         shaderInfo.converted = essl_src;
-        const char* s[] = { essl_src.c_str() };
-        GLES.glShaderSource(shader, 1, s, nullptr);
-        if (hardware->emulate_texture_buffer)
-            shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
+
+        // ================= 新增：输出最终 ESSL 源码 =================
+        GLint shaderType = 0;
+        GLES.glGetShaderiv(shader, GL_SHADER_TYPE, &shaderType);
+        const char* typeName = "UNKNOWN";
+        switch (shaderType) {
+            case GL_VERTEX_SHADER:          typeName = "VERTEX"; break;
+            case GL_FRAGMENT_SHADER:        typeName = "FRAGMENT"; break;
+            case GL_COMPUTE_SHADER:         typeName = "COMPUTE"; break;
+            case GL_GEOMETRY_SHADER:        typeName = "GEOMETRY"; break;
+            case GL_TESS_CONTROL_SHADER:    typeName = "TESS_CTRL"; break;
+            case GL_TESS_EVALUATION_SHADER: typeName = "TESS_EVAL"; break;
+        }
+        LOG_I("======== FINAL ESSL (Shader %u, %s) ========", shader, typeName);
+        LOG_I("%s", essl_src.c_str());
+        LOG_I("==============================================");
+        // =========================================================
+
+        const char* s[] = {essl_src.c_str()};
+        GLES.glShaderSource(shader, count, s, nullptr);
+        
+        if (hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
     } else {
-        LOG_E("Critical: no shader source supplied for shader %d", shader);
+        LOG_E("Failed to convert glsl.")
     }
+    
     CHECK_GL_ERROR
 }
 
@@ -166,6 +140,9 @@ void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
     LOG()
     GLES.glGetShaderiv(shader, pname, params);
     
+    // ===== 临时注释掉强制成功逻辑，以获取驱动真实的编译错误 =====
+    // （如需查看编译错误，请删除下面这段注释符号，然后重新编译）
+    /*
     if (global_settings.ignore_error >= IgnoreErrorLevel::Partial && pname == GL_COMPILE_STATUS && !*params) {
         GLchar infoLog[512];
         GLES.glGetShaderInfoLog(shader, 512, nullptr, infoLog);
@@ -173,6 +150,8 @@ void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
         LOG_W_FORCE("Now try to cheat.")
         *params = GL_TRUE;
     }
+    */
+    // =============================================================
     
     CHECK_GL_ERROR
 }
@@ -187,8 +166,7 @@ GLuint glCreateShader(GLenum shaderType) {
     
     GLuint shader = GLES.glCreateShader(shaderType);
     
-    if (shader != 0 && hardware->emulate_texture_buffer)
-        shader_map_is_sampler_buffer_emulated[shader] = false;
+    if (shader != 0 && hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = false;
     
     CHECK_GL_ERROR
     return shader;
