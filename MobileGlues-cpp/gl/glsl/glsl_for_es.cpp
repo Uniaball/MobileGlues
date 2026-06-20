@@ -188,11 +188,32 @@ inline std::string forceSupporterOutput(const std::string& glslCode) {
     return result;
 }
 
+// 完全重写的 layout binding/set 清理函数，可处理任意限定符顺序
 inline std::string removeLayoutBinding(const std::string& glslCode) {
-    static const std::regex bindingRegex1(R"(layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*)", std::regex::optimize);
-    static const std::regex bindingRegex2(R"(layout\s*\(\s*binding\s*=\s*\d+\s*,)", std::regex::optimize);
-    std::string result = std::regex_replace(glslCode, bindingRegex1, "");
-    result = std::regex_replace(result, bindingRegex2, "layout(");
+    static const std::regex layoutBlock(R"(layout\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\))", std::regex::optimize);
+    std::string result = glslCode;
+
+    auto cleanLayout = [](const std::smatch& m) -> std::string {
+        std::string inside = m[1].str();
+        // 移除 set = 数字（可能带前后逗号）
+        inside = std::regex_replace(inside, std::regex(R"(,?\s*set\s*=\s*\d+\s*,?)"), "");
+        // 移除 binding = 数字
+        inside = std::regex_replace(inside, std::regex(R"(,?\s*binding\s*=\s*\d+\s*,?)"), "");
+        // 清理多余的逗号
+        inside = std::regex_replace(inside, std::regex(R"(\s*,\s*,)"), ", ");
+        inside = std::regex_replace(inside, std::regex(R"(^\s*,\s*)"), "");
+        inside = std::regex_replace(inside, std::regex(R"(\s*,\s*$)"), "");
+        // 去除首尾空格
+        auto trim = [](std::string& s) {
+            s.erase(s.begin(), std::find_if_not(s.begin(), s.end(), ::isspace));
+            s.erase(std::find_if_not(s.rbegin(), s.rend(), ::isspace).base(), s.end());
+        };
+        trim(inside);
+        if (inside.empty()) return "";   // 如果只剩空括号，整个 layout 移除
+        return "layout(" + inside + ")";
+    };
+
+    result = std::regex_replace(result, layoutBlock, cleanLayout);
     return result;
 }
 
@@ -396,20 +417,12 @@ bool process_non_opaque_atomic_to_ssbo(std::string& source) {
 }
 
 void process_sampler_buffer(std::string& source) {
-    if (source.find("samplerBuffer") == std::string::npos) return;
-
-    source = std::regex_replace(source, std::regex(R"(\bisamplerBuffer\b)"), "isampler2D");
-    source = std::regex_replace(source, std::regex(R"(\busamplerBuffer\b)"), "usampler2D");
-    source = std::regex_replace(source, std::regex(R"(\bsamplerBuffer\b)"), "sampler2D");
-
-    static const std::regex fetch_rx_three(R"(texelFetch\s*\(\s*(\w+)\s*,\s*(.+?)\s*,\s*0\s*\))");
-    source = std::regex_replace(source, fetch_rx_three, "texelFetch($1, bufferCoords($2), 0)");
-
-    static const std::regex fetch_rx_two(R"(texelFetch\s*\(\s*(\w+)\s*,\s*([^,]+)\s*\))");
-    source = std::regex_replace(source, fetch_rx_two, "texelFetch($1, bufferCoords($2), 0)");
-
-    if (source.find("ivec2 bufferCoords") == std::string::npos) {
-        const char* boundaryProtection = R"(
+    if (source.find("isamplerBuffer") == std::string::npos) return;
+    static const std::regex buf_rx(R"(isamplerBuffer)", std::regex::optimize);
+    source = std::regex_replace(source, buf_rx, "isampler2D");
+    static const std::regex fetch_rx(R"(texelFetch\s*\(\s*(\w+)\s*,\s*([^)]+?)\s*\))", std::regex::optimize);
+    source = std::regex_replace(source, fetch_rx, "texelFetch($1, ivec2(($2) % u_BufferTexWidth, ($2) / u_BufferTexWidth), 0)");
+    const char* boundaryProtection = R"(
 ivec2 bufferCoords(int index) {
     int width = u_BufferTexWidth;
     int x = index % width;
@@ -421,22 +434,18 @@ ivec2 bufferCoords(int index) {
     return ivec2(x, y);
 }
 )";
-        size_t insertion_point = find_insertion_point(source);
-        if (insertion_point != std::string::npos)
-            source.insert(insertion_point, boundaryProtection);
-    }
-
-    if (source.find("uniform int u_BufferTexWidth") == std::string::npos) {
-        const char* uniformDecl = R"(
+    size_t insertion_point = find_insertion_point(source);
+    if (insertion_point != std::string::npos)
+        source.insert(insertion_point, boundaryProtection);
+    const char* uniformDecl = R"(
 uniform int u_BufferTexWidth;
 uniform int u_BufferTexHeight;
 )";
-        size_t insertion_point = find_insertion_point(source);
-        if (insertion_point != std::string::npos) {
-            insertion_point = source.find('\n', insertion_point);
-            if (insertion_point != std::string::npos)
-                source.insert(insertion_point + 1, uniformDecl);
-        }
+    insertion_point = find_insertion_point(source);
+    if (insertion_point != std::string::npos) {
+        insertion_point = source.find('\n', insertion_point);
+        if (insertion_point != std::string::npos)
+            source.insert(insertion_point + 1, uniformDecl);
     }
 }
 
@@ -511,6 +520,7 @@ vec4 GI_TemporalFilter() {
 )";
     glsl.insert(insertPos, "\n" + GI_TemporalFilterImpl + "\n");
 }
+
 #define xstr(s) str(s)
 #define str(s) #s
 
@@ -541,11 +551,7 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
     inject_temporal_filter(ret);
     if (!g_gles_caps.GL_EXT_texture_query_lod) inject_textureQueryLod(ret);
     inject_mg_macro_definition(ret);
-
-    if (ret.find("samplerBuffer") != std::string::npos) {
-        process_sampler_buffer(ret);
-    }
-
+    if (hardware->emulate_texture_buffer) process_sampler_buffer(ret);
     *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
     return ret;
 }
@@ -615,6 +621,8 @@ std::string spirv_to_essl(std::vector<unsigned int> spirv, uint essl_version, in
     spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION,
                                    essl_version >= 300 ? essl_version : 300);
     spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
+    // 关键修复：禁止生成 Vulkan 语义的 set/binding 限定符
+    spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
     spvc_compiler_install_compiler_options(compiler_glsl, options);
     spvc_compiler_compile(compiler_glsl, &result);
     if (!result) {
@@ -653,8 +661,13 @@ std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_ve
         return_code = -2;
         return "";
     }
-    if (glsl_type != GL_COMPUTE_SHADER) essl = removeLayoutBinding(essl);
-    essl = processOutColorLocations(essl);
+    // 顺序调整：先清理 layout 限定符，再补 outColor 位置
+    if (glsl_type != GL_COMPUTE_SHADER) {
+        essl = removeLayoutBinding(essl);
+        essl = processOutColorLocations(essl);
+    } else {
+        essl = removeLayoutBinding(essl);
+    }
     essl = forceSupporterOutput(essl);
     LOG_D("Originally GLSL to GLSL ES Complete: \n%s", essl.c_str())
     return_code = 0;

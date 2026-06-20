@@ -73,7 +73,7 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         }
     }
     
-    bool is_sampler_buffer_emulated = check_if_sampler_buffer_used(glsl_src);
+    bool is_sampler_buffer_emulated = hardware->emulate_texture_buffer && check_if_sampler_buffer_used(glsl_src);
     
     if (is_direct_shader(glsl_src.c_str())) {
         LOG_D("[INFO] [Shader] Direct shader source: ")
@@ -91,14 +91,14 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         essl_src = GLSLtoGLSLES(glsl_src.c_str(), shaderType, hardware->es_version, glsl_version, return_code);
         
         if (return_code == 1) {
-            // atomicCounterEmulated
             shader_map_is_atomic_counter_emulated[shader] = true;
             LOG_D("[INFO] [Shader] Atomic counter emulated in shader %d", shader)
         }
         
+        // 转换失败时的 fallback：使用原始桌面 GLSL 源码，避免空着色器
         if (essl_src.empty()) {
-            LOG_E("Failed to convert shader %d.", shader)
-            return;
+            LOG_E("Failed to convert shader %d. Falling back to original desktop GLSL – rendering may break.", shader);
+            essl_src = glsl_src;
         }
         
         LOG_D("\n[INFO] [Shader] Converted Shader source: \n%s", essl_src.c_str())
@@ -107,29 +107,12 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
     if (!essl_src.empty()) {
         shaderInfo.id = shader;
         shaderInfo.converted = essl_src;
-
-        // ================= 新增：输出最终 ESSL 源码 =================
-        GLint shaderType = 0;
-        GLES.glGetShaderiv(shader, GL_SHADER_TYPE, &shaderType);
-        const char* typeName = "UNKNOWN";
-        switch (shaderType) {
-            case GL_VERTEX_SHADER:          typeName = "VERTEX"; break;
-            case GL_FRAGMENT_SHADER:        typeName = "FRAGMENT"; break;
-            case GL_COMPUTE_SHADER:         typeName = "COMPUTE"; break;
-            case GL_GEOMETRY_SHADER:        typeName = "GEOMETRY"; break;
-            case GL_TESS_CONTROL_SHADER:    typeName = "TESS_CTRL"; break;
-            case GL_TESS_EVALUATION_SHADER: typeName = "TESS_EVAL"; break;
-        }
-        LOG_I("======== FINAL ESSL (Shader %u, %s) ========", shader, typeName);
-        LOG_I("%s", essl_src.c_str());
-        LOG_I("==============================================");
-        // =========================================================
-
         const char* s[] = {essl_src.c_str()};
-        GLES.glShaderSource(shader, count, s, nullptr);   
-        shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
+        GLES.glShaderSource(shader, count, s, nullptr);
+        
+        if (hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
     } else {
-        LOG_E("Failed to convert glsl.")
+        LOG_E("Shader source empty for shader %d, unable to submit.", shader)
     }
     
     CHECK_GL_ERROR
@@ -139,9 +122,6 @@ void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
     LOG()
     GLES.glGetShaderiv(shader, pname, params);
     
-    // ===== 临时注释掉强制成功逻辑，以获取驱动真实的编译错误 =====
-    // （如需查看编译错误，请删除下面这段注释符号，然后重新编译）
-    /*
     if (global_settings.ignore_error >= IgnoreErrorLevel::Partial && pname == GL_COMPILE_STATUS && !*params) {
         GLchar infoLog[512];
         GLES.glGetShaderInfoLog(shader, 512, nullptr, infoLog);
@@ -149,8 +129,6 @@ void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
         LOG_W_FORCE("Now try to cheat.")
         *params = GL_TRUE;
     }
-    */
-    // =============================================================
     
     CHECK_GL_ERROR
 }
@@ -165,7 +143,7 @@ GLuint glCreateShader(GLenum shaderType) {
     
     GLuint shader = GLES.glCreateShader(shaderType);
     
-    if (shader != 0) shader_map_is_sampler_buffer_emulated[shader] = false;
+    if (shader != 0 && hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = false;
     
     CHECK_GL_ERROR
     return shader;

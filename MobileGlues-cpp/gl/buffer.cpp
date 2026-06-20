@@ -496,6 +496,7 @@ void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
         CHECK_GL_ERROR
     }
 
+    if (hardware->emulate_texture_buffer) {
         LOG_D("Emulating glTexBuffer");
         GLint boundTexture = 0;
         GLint prev_pixel_buffer_binding = 0;
@@ -583,6 +584,7 @@ void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
 
         CHECK_GL_ERROR;
         return;
+    }
 
     GLES.glTexBuffer(target, internalformat, real_buffer);
     CHECK_GL_ERROR
