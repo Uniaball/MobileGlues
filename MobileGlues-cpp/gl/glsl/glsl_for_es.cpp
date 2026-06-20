@@ -188,7 +188,7 @@ inline std::string forceSupporterOutput(const std::string& glslCode) {
     return result;
 }
 
-// 修复版 removeLayoutBinding，使用迭代器代替回调，兼容 NDK
+// 增强版 removeLayoutBinding，处理任意顺序的set/binding
 inline std::string removeLayoutBinding(const std::string& glslCode) {
     static const std::regex layoutBlock(R"(layout\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\))", std::regex::optimize);
     std::string result;
@@ -200,7 +200,7 @@ inline std::string removeLayoutBinding(const std::string& glslCode) {
         result.append(glslCode, lastPos, it->position() - lastPos);
         
         std::string inside = (*it)[1].str();
-        // 移除 set = 数字（可能带前后逗号）
+        // 移除 set = 数字
         inside = std::regex_replace(inside, std::regex(R"(,?\s*set\s*=\s*\d+\s*,?)"), "");
         // 移除 binding = 数字
         inside = std::regex_replace(inside, std::regex(R"(,?\s*binding\s*=\s*\d+\s*,?)"), "");
@@ -552,14 +552,17 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
     ret = replace_line_starting_with(ret, "#line");
     replace_all(ret, "#ifdef GL_ARB_derivative_control", "#if 0");
     replace_all(ret, "#ifndef GL_ARB_derivative_control", "#if 1");
+    // 关键修复：禁用 VULKAN 宏，避免 push_constant 等 Vulkan 专属语法
+    replace_all(ret, "#ifdef VULKAN", "#if 0");
+    replace_all(ret, "#ifndef VULKAN", "#if 1");
     replace_all(ret,
                 "const mat3 rotInverse = transpose(rot);",
                 "const mat3 rotInverse = mat3(rot[0][0], rot[1][0], rot[2][0], rot[0][1], rot[1][1], rot[2][1], rot[0][2], rot[1][2], rot[2][2]);");
     inject_temporal_filter(ret);
     if (!g_gles_caps.GL_EXT_texture_query_lod) inject_textureQueryLod(ret);
     inject_mg_macro_definition(ret);
-    // 修复：无条件调用 process_sampler_buffer，它内部会检查是否需要处理
-    process_sampler_buffer(ret);
+    // 恢复条件调用，保持云渲染正常
+    if (hardware->emulate_texture_buffer) process_sampler_buffer(ret);
     *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
     return ret;
 }
