@@ -191,10 +191,16 @@ inline std::string forceSupporterOutput(const std::string& glslCode) {
 // 完全重写的 layout binding/set 清理函数，可处理任意限定符顺序
 inline std::string removeLayoutBinding(const std::string& glslCode) {
     static const std::regex layoutBlock(R"(layout\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\))", std::regex::optimize);
-    std::string result = glslCode;
-
-    auto cleanLayout = [](const std::smatch& m) -> std::string {
-        std::string inside = m[1].str();
+    std::string result;
+    std::sregex_iterator it(glslCode.begin(), glslCode.end(), layoutBlock);
+    std::sregex_iterator end;
+    size_t lastPos = 0;
+    
+    for (; it != end; ++it) {
+        // 追加匹配前的部分
+        result.append(glslCode, lastPos, it->position() - lastPos);
+        
+        std::string inside = (*it)[1].str();
         // 移除 set = 数字（可能带前后逗号）
         inside = std::regex_replace(inside, std::regex(R"(,?\s*set\s*=\s*\d+\s*,?)"), "");
         // 移除 binding = 数字
@@ -209,11 +215,15 @@ inline std::string removeLayoutBinding(const std::string& glslCode) {
             s.erase(std::find_if_not(s.rbegin(), s.rend(), ::isspace).base(), s.end());
         };
         trim(inside);
-        if (inside.empty()) return "";   // 如果只剩空括号，整个 layout 移除
-        return "layout(" + inside + ")";
-    };
-
-    result = std::regex_replace(result, layoutBlock, cleanLayout);
+        
+        if (!inside.empty()) {
+            result.append("layout(" + inside + ")");
+        }
+        // 如果 inside 为空，整个 layout() 被移除，不添加任何内容
+        lastPos = it->position() + it->length();
+    }
+    // 追加剩余尾部
+    result.append(glslCode, lastPos, glslCode.length() - lastPos);
     return result;
 }
 
