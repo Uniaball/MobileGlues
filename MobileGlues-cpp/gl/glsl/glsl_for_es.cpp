@@ -529,7 +529,11 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
     inject_temporal_filter(ret);
     if (!g_gles_caps.GL_EXT_texture_query_lod) inject_textureQueryLod(ret);
     inject_mg_macro_definition(ret);
-    if (hardware->emulate_texture_buffer) process_sampler_buffer(ret);
+
+    if (ret.find("samplerBuffer") != std::string::npos) {
+        process_sampler_buffer(ret);
+    }
+
     *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
     return ret;
 }
