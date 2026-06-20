@@ -205,7 +205,7 @@ void glUseProgram(GLuint program) {
 void glAttachShader(GLuint program, GLuint shader) {
     LOG()
     LOG_D("glAttachShader(%u, %u)", program, shader)
-    if (hardware->emulate_texture_buffer && shader_map_is_sampler_buffer_emulated[shader])
+    if (shader_map_is_sampler_buffer_emulated[shader])
         program_map_is_sampler_buffer_emulated[program] = true;
     if (shader_map_is_atomic_counter_emulated[shader]) {
         program_map_is_atomic_counter_emulated[program] = true;
@@ -234,11 +234,9 @@ GLuint glCreateProgram() {
     LOG()
     LOG_D("glCreateProgram")
     GLuint program = GLES.glCreateProgram();
-    if (hardware->emulate_texture_buffer) {
-        program_map_is_sampler_buffer_emulated[program] = false;
-        if (g_samplerCacheForSamplerBuffer.find(program) != g_samplerCacheForSamplerBuffer.end()) {
-            g_samplerCacheForSamplerBuffer.erase(program);
-        }
+    program_map_is_sampler_buffer_emulated[program] = false;
+    if (g_samplerCacheForSamplerBuffer.find(program) != g_samplerCacheForSamplerBuffer.end()) {
+        g_samplerCacheForSamplerBuffer.erase(program);
     }
     program_map_is_atomic_counter_emulated[program] = false;
     program_map_should_generate_fs[program] = ShouldGenerateFSState::Unknown;

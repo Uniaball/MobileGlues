@@ -1010,7 +1010,7 @@ void glBindTexture(GLenum target, GLuint texture) {
     LOG_D("glBindTexture(%s, %d)", glEnumToString(target), texture)
     INIT_CHECK_GL_ERROR
 
-    if (hardware && gl_state && hardware->emulate_texture_buffer && target == GL_TEXTURE_BUFFER) {
+    if (hardware && gl_state && target == GL_TEXTURE_BUFFER) {
         GLES.glActiveTexture(GL_TEXTURE0 + 15);
         GLES.glBindTexture(GL_TEXTURE_2D, texture);
         GLES.glActiveTexture(GL_TEXTURE0 + gl_state->current_tex_unit);

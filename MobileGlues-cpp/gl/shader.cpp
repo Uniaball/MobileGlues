@@ -73,7 +73,7 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         }
     }
     
-    bool is_sampler_buffer_emulated = hardware->emulate_texture_buffer && check_if_sampler_buffer_used(glsl_src);
+    bool is_sampler_buffer_emulated = check_if_sampler_buffer_used(glsl_src);
     
     if (is_direct_shader(glsl_src.c_str())) {
         LOG_D("[INFO] [Shader] Direct shader source: ")
