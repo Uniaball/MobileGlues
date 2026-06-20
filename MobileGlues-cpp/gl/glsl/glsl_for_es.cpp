@@ -405,7 +405,7 @@ void process_sampler_buffer(std::string& source) {
     static const std::regex fetch_rx_three(R"(texelFetch\s*\(\s*(\w+)\s*,\s*(.+?)\s*,\s*0\s*\))");
     source = std::regex_replace(source, fetch_rx_three, "texelFetch($1, bufferCoords($2), 0)");
 
-    static const std::regex fetch_rx_two(R"(texelFetch\s*\(\s*(\w+)\s*,\s*((?:[^,)]|\([^)]*\))*)\s*\))");
+    static const std::regex fetch_rx_two(R"(texelFetch\s*\(\s*(\w+)\s*,\s*([^,]+?)\s*\))");
     source = std::regex_replace(source, fetch_rx_two, "texelFetch($1, bufferCoords($2), 0)");
 
     if (source.find("ivec2 bufferCoords") == std::string::npos) {
