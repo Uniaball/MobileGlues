@@ -396,12 +396,17 @@ bool process_non_opaque_atomic_to_ssbo(std::string& source) {
 }
 
 void process_sampler_buffer(std::string& source) {
-    if (source.find("isamplerBuffer") == std::string::npos) return;
-    static const std::regex buf_rx(R"(isamplerBuffer)", std::regex::optimize);
-    source = std::regex_replace(source, buf_rx, "isampler2D");
-    static const std::regex fetch_rx(R"(texelFetch\s*\(\s*(\w+)\s*,\s*([^)]+?)\s*\))", std::regex::optimize);
-    source = std::regex_replace(source, fetch_rx, "texelFetch($1, ivec2(($2) % u_BufferTexWidth, ($2) / u_BufferTexWidth), 0)");
-    const char* boundaryProtection = R"(
+    if (source.find("samplerBuffer") == std::string::npos) return;
+
+    source = std::regex_replace(source, std::regex(R"(\bisamplerBuffer\b)"), "isampler2D");
+    source = std::regex_replace(source, std::regex(R"(\busamplerBuffer\b)"), "usampler2D");
+    source = std::regex_replace(source, std::regex(R"(\bsamplerBuffer\b)"), "sampler2D");
+
+    static const std::regex fetch_rx(R"(texelFetch\s*\(\s*(\w+)\s*,\s*(.+?)\s*,\s*0\s*\))");
+    source = std::regex_replace(source, fetch_rx, "texelFetch($1, bufferCoords($2), 0)");
+
+    if (source.find("ivec2 bufferCoords") == std::string::npos) {
+        const char* boundaryProtection = R"(
 ivec2 bufferCoords(int index) {
     int width = u_BufferTexWidth;
     int x = index % width;
@@ -413,18 +418,22 @@ ivec2 bufferCoords(int index) {
     return ivec2(x, y);
 }
 )";
-    size_t insertion_point = find_insertion_point(source);
-    if (insertion_point != std::string::npos)
-        source.insert(insertion_point, boundaryProtection);
-    const char* uniformDecl = R"(
+        size_t insertion_point = find_insertion_point(source);
+        if (insertion_point != std::string::npos)
+            source.insert(insertion_point, boundaryProtection);
+    }
+
+    if (source.find("uniform int u_BufferTexWidth") == std::string::npos) {
+        const char* uniformDecl = R"(
 uniform int u_BufferTexWidth;
 uniform int u_BufferTexHeight;
 )";
-    insertion_point = find_insertion_point(source);
-    if (insertion_point != std::string::npos) {
-        insertion_point = source.find('\n', insertion_point);
-        if (insertion_point != std::string::npos)
-            source.insert(insertion_point + 1, uniformDecl);
+        size_t insertion_point = find_insertion_point(source);
+        if (insertion_point != std::string::npos) {
+            insertion_point = source.find('\n', insertion_point);
+            if (insertion_point != std::string::npos)
+                source.insert(insertion_point + 1, uniformDecl);
+        }
     }
 }
 
