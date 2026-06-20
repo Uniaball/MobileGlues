@@ -95,7 +95,6 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
             LOG_D("[INFO] [Shader] Atomic counter emulated in shader %d", shader)
         }
         
-        // 转换失败时的 fallback：使用原始桌面 GLSL 源码，避免空着色器
         if (essl_src.empty()) {
             LOG_E("Failed to convert shader %d. Falling back to original desktop GLSL – rendering may break.", shader);
             essl_src = glsl_src;
@@ -107,13 +106,8 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
     if (!essl_src.empty()) {
         shaderInfo.id = shader;
         shaderInfo.converted = essl_src;
-        
-        // 强制打印最终提交给 GLES 的源码，用于调试
-        LOG_W_FORCE("Final ESSL source for shader %d:\n%s", shader, essl_src.c_str());
-        
         const char* s[] = {essl_src.c_str()};
         GLES.glShaderSource(shader, count, s, nullptr);
-        
         if (hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
     } else {
         LOG_E("Shader source empty for shader %d, unable to submit.", shader)

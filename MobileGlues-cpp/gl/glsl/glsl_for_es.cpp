@@ -188,7 +188,6 @@ inline std::string forceSupporterOutput(const std::string& glslCode) {
     return result;
 }
 
-// 增强版 removeLayoutBinding，处理任意顺序的set/binding
 inline std::string removeLayoutBinding(const std::string& glslCode) {
     static const std::regex layoutBlock(R"(layout\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\))", std::regex::optimize);
     std::string result;
@@ -200,21 +199,16 @@ inline std::string removeLayoutBinding(const std::string& glslCode) {
         result.append(glslCode, lastPos, it->position() - lastPos);
         
         std::string inside = (*it)[1].str();
-        // 移除 set = 数字
         inside = std::regex_replace(inside, std::regex(R"(,?\s*set\s*=\s*\d+\s*,?)"), "");
-        // 移除 binding = 数字
         inside = std::regex_replace(inside, std::regex(R"(,?\s*binding\s*=\s*\d+\s*,?)"), "");
-        // 清理多余的逗号
         inside = std::regex_replace(inside, std::regex(R"(\s*,\s*,)"), ", ");
         inside = std::regex_replace(inside, std::regex(R"(^\s*,\s*)"), "");
         inside = std::regex_replace(inside, std::regex(R"(\s*,\s*$)"), "");
-        // 去除首尾空格
         auto trim = [](std::string& s) {
             s.erase(s.begin(), std::find_if_not(s.begin(), s.end(), ::isspace));
             s.erase(std::find_if_not(s.rbegin(), s.rend(), ::isspace).base(), s.end());
         };
         trim(inside);
-        
         if (!inside.empty()) {
             result.append("layout(" + inside + ")");
         }
@@ -552,7 +546,6 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
     ret = replace_line_starting_with(ret, "#line");
     replace_all(ret, "#ifdef GL_ARB_derivative_control", "#if 0");
     replace_all(ret, "#ifndef GL_ARB_derivative_control", "#if 1");
-    // 关键修复：禁用 VULKAN 宏，避免 push_constant 等 Vulkan 专属语法
     replace_all(ret, "#ifdef VULKAN", "#if 0");
     replace_all(ret, "#ifndef VULKAN", "#if 1");
     replace_all(ret,
@@ -561,7 +554,6 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
     inject_temporal_filter(ret);
     if (!g_gles_caps.GL_EXT_texture_query_lod) inject_textureQueryLod(ret);
     inject_mg_macro_definition(ret);
-    // 恢复条件调用，保持云渲染正常
     if (hardware->emulate_texture_buffer) process_sampler_buffer(ret);
     *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
     return ret;
@@ -602,15 +594,13 @@ std::vector<unsigned int> glsl_to_spirv(GLenum shader_type, int glsl_version, co
     shader.setAutoMapBindings(true);
     TBuiltInResource TBuiltInResource_resources = InitResources();
     if (!shader.parse(&TBuiltInResource_resources, glsl_version, true, EShMsgDefault)) {
-        // 强制输出编译错误，便于调试
-        LOG_W_FORCE("GLSL Compiling ERROR: \n%s", shader.getInfoLog())
+        LOG_D("GLSL Compiling ERROR: \n%s", shader.getInfoLog())
         errc = -1; return {};
     }
     LOG_D("GLSL Compiled.")
     glslang::TProgram program; program.addShader(&shader);
     if (!program.link(EShMsgDefault)) {
-        // 强制输出链接错误
-        LOG_W_FORCE("Shader Linking ERROR: %s", program.getInfoLog())
+        LOG_D("Shader Linking ERROR: %s", program.getInfoLog())
         errc = -1; return {};
     }
     LOG_D("Shader Linked.")
@@ -634,7 +624,6 @@ std::string spirv_to_essl(std::vector<unsigned int> spirv, uint essl_version, in
     spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION,
                                    essl_version >= 300 ? essl_version : 300);
     spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
-    // 关键修复：禁止生成 Vulkan 语义的 set/binding 限定符
     spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
     spvc_compiler_install_compiler_options(compiler_glsl, options);
     spvc_compiler_compile(compiler_glsl, &result);
@@ -674,11 +663,6 @@ std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_ve
         return_code = -2;
         return "";
     }
-
-    // 调试日志：输出 spirv-cross 原始结果
-    LOG_W_FORCE("SPIRV-Cross raw output for shader type %d:\n%s", (int)glsl_type, essl.c_str());
-
-    // 顺序调整：先清理 layout 限定符，再补 outColor 位置
     if (glsl_type != GL_COMPUTE_SHADER) {
         essl = removeLayoutBinding(essl);
         essl = processOutColorLocations(essl);
@@ -686,7 +670,6 @@ std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_ve
         essl = removeLayoutBinding(essl);
     }
     essl = forceSupporterOutput(essl);
-
     LOG_D("Originally GLSL to GLSL ES Complete: \n%s", essl.c_str())
     return_code = 0;
     if (atomicCounterEmulated) return_code = 1;
