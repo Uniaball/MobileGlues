@@ -106,9 +106,7 @@ void setupBufferTextureUniforms(GLuint program) {
 
 void prepareForDraw() {
     LOG_D("prepareForDraw...")
-    if (hardware->emulate_texture_buffer) {
-        setupBufferTextureUniforms(gl_state->current_program);
-    }
+    setupBufferTextureUniforms(gl_state->current_program);
 }
 
 void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei primcount) {
