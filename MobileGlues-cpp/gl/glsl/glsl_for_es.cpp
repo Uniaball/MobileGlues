@@ -188,7 +188,7 @@ inline std::string forceSupporterOutput(const std::string& glslCode) {
     return result;
 }
 
-// 完全重写的 layout binding/set 清理函数，可处理任意限定符顺序
+// 完全重写的 layout binding/set 清理函数，使用迭代器代替回调
 inline std::string removeLayoutBinding(const std::string& glslCode) {
     static const std::regex layoutBlock(R"(layout\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\))", std::regex::optimize);
     std::string result;
@@ -197,7 +197,6 @@ inline std::string removeLayoutBinding(const std::string& glslCode) {
     size_t lastPos = 0;
     
     for (; it != end; ++it) {
-        // 追加匹配前的部分
         result.append(glslCode, lastPos, it->position() - lastPos);
         
         std::string inside = (*it)[1].str();
@@ -222,7 +221,6 @@ inline std::string removeLayoutBinding(const std::string& glslCode) {
         // 如果 inside 为空，整个 layout() 被移除，不添加任何内容
         lastPos = it->position() + it->length();
     }
-    // 追加剩余尾部
     result.append(glslCode, lastPos, glslCode.length() - lastPos);
     return result;
 }
@@ -671,6 +669,10 @@ std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_ve
         return_code = -2;
         return "";
     }
+
+    // 调试日志：输出 spirv-cross 原始结果
+    LOG_W_FORCE("SPIRV-Cross raw output for shader type %d:\n%s", (int)glsl_type, essl.c_str());
+
     // 顺序调整：先清理 layout 限定符，再补 outColor 位置
     if (glsl_type != GL_COMPUTE_SHADER) {
         essl = removeLayoutBinding(essl);
@@ -679,6 +681,7 @@ std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_ve
         essl = removeLayoutBinding(essl);
     }
     essl = forceSupporterOutput(essl);
+
     LOG_D("Originally GLSL to GLSL ES Complete: \n%s", essl.c_str())
     return_code = 0;
     if (atomicCounterEmulated) return_code = 1;

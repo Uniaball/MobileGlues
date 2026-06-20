@@ -107,6 +107,10 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
     if (!essl_src.empty()) {
         shaderInfo.id = shader;
         shaderInfo.converted = essl_src;
+        
+        // 强制打印最终提交给 GLES 的源码，用于调试
+        LOG_W_FORCE("Final ESSL source for shader %d:\n%s", shader, essl_src.c_str());
+        
         const char* s[] = {essl_src.c_str()};
         GLES.glShaderSource(shader, count, s, nullptr);
         
