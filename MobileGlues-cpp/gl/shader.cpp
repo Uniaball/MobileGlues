@@ -126,9 +126,8 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         // =========================================================
 
         const char* s[] = {essl_src.c_str()};
-        GLES.glShaderSource(shader, count, s, nullptr);
-        
-        if (hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
+        GLES.glShaderSource(shader, count, s, nullptr);   
+        shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
     } else {
         LOG_E("Failed to convert glsl.")
     }
@@ -166,7 +165,7 @@ GLuint glCreateShader(GLenum shaderType) {
     
     GLuint shader = GLES.glCreateShader(shaderType);
     
-    if (shader != 0 && hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = false;
+    if (shader != 0) shader_map_is_sampler_buffer_emulated[shader] = false;
     
     CHECK_GL_ERROR
     return shader;
