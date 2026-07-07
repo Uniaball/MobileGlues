@@ -992,9 +992,17 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
           glEnumToString(target), level, xoffset, yoffset, width, height, glEnumToString(format), glEnumToString(type),
           pixels)
 
-    if (format == GL_BGRA && (type == GL_UNSIGNED_INT_8_8_8_8 || type == GL_UNSIGNED_INT_8_8_8_8_REV)) {
-        glTexParameteri(target, GL_TEXTURE_SWIZZLE_R,  GL_BLUE);
-        glTexParameteri(target, GL_TEXTURE_SWIZZLE_B,  GL_RED);
+    if (format == GL_BGRA) {
+        if (type == GL_UNSIGNED_INT_8_8_8_8) { // Stored as ARGB -> RGBA
+            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_A, GL_RED);
+            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, GL_GREEN);
+            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_G, GL_BLUE);
+            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, GL_ALPHA);
+
+        } else if (type == GL_UNSIGNED_INT_8_8_8_8_REV) { // Stored as BGRA -> RGBA
+            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, GL_RED);
+            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+        }
 
         format = GL_RGBA;
         type = GL_UNSIGNED_BYTE;
