@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-#include "3rdparty/xxhash/xxhash.h"
+#include "xxhash.h"
 
 class Cache {
 public:

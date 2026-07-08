@@ -4,6 +4,7 @@
 //   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
 // SPDX-License-Identifier: LGPL-2.1-only
 // End of Source File Header
+
 #ifndef GLSL_FOR_ES
 #define GLSL_FOR_ES
 #include "../../gles/loader.h"
