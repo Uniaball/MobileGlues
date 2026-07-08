@@ -50,7 +50,7 @@ else()
     set(CMAKE_ANDROID_STL_TYPE c++_static)
 endif()
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MATCHES "AppleClang")
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
     add_compile_options(-O3 -ffunction-sections -fdata-sections)
     add_link_options(-Wl,--gc-sections)
     
