@@ -18,7 +18,7 @@ Cache::Cache() {
 }
 
 uint64_t Cache::computeXXHash(const char* data) {
-    return XXH64(data, strlen(data), 0);
+    return XXHash64::hash(data, strlen(data), 0);
 }
 
 const char* Cache::get(const char* glsl) {
@@ -87,7 +87,7 @@ bool Cache::load() {
         maintainCacheSize();
         return true;
     } catch (...) {
-        LOG_W_FORCE("Error while loading glsl cache file. Clearing it...");
+        LOG_W_FORCE("Error while loading glsl cache file. Clearing it...")
         cacheMap.clear();
         cacheSize = 0;
         cacheList.clear();

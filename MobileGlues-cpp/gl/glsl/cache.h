@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-#include <xxhash/xxhash.h>
+#include <xxhash64.h>
 
 class Cache {
 public:
@@ -26,7 +26,6 @@ public:
 
     const char* get(const char* glsl);
     void put(const char* glsl, const char* essl);
-
     bool load();
     void save();
 
