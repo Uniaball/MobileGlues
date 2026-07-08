@@ -5,7 +5,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-
 # glslang & SPIRV-Cross
 set(ENABLE_RTTI                ON  CACHE BOOL "Enables RTTI (will be took by glslang)" FORCE)
 set(ENABLE_HLSL                OFF CACHE BOOL "Disable HLSL input for glslang" FORCE)
@@ -27,6 +26,26 @@ set(SPIRV_CROSS_ENABLE_UTIL    OFF CACHE BOOL "Disable util" FORCE)
 add_subdirectory(3rdparty/glslang)
 add_subdirectory(3rdparty/SPIRV-Cross)
 
+# USE_FULL_LTO: ON/OFF
+if (DEFINED ENV{USE_FULL_LTO})
+    set(USE_FULL_LTO "$ENV{USE_FULL_LTO}" CACHE STRING "Enable Link Time Optimization" FORCE)
+endif()
+if (DEFINED ENV{USE_EXTRA_OPTIMIZATIONS})
+    set(USE_EXTRA_OPTIMIZATIONS "$ENV{USE_EXTRA_OPTIMIZATIONS}" CACHE STRING "Enable extra performance optimizations" FORCE)
+endif()
+
+if (USE_FULL_LTO STREQUAL "ON" OR USE_FULL_LTO STREQUAL "TRUE" OR USE_FULL_LTO STREQUAL "1")
+    set(USE_FULL_LTO_ENABLED TRUE)
+else()
+    set(USE_FULL_LTO_ENABLED FALSE)
+endif()
+
+if (USE_EXTRA_OPTIMIZATIONS STREQUAL "ON" OR USE_EXTRA_OPTIMIZATIONS STREQUAL "TRUE" OR USE_EXTRA_OPTIMIZATIONS STREQUAL "1")
+    set(USE_EXTRA_OPTIMIZATIONS_ENABLED TRUE)
+else()
+    set(USE_EXTRA_OPTIMIZATIONS_ENABLED FALSE)
+endif()
+
 if(MACOS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w -fvisibility=default -funwind-tables -g -D_THREAD_SAFE -fPIC -stdlib=libc++")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w -g -std=gnu99 -funwind-tables -fvisibility=hidden")
@@ -38,44 +57,65 @@ else()
     set(CMAKE_ANDROID_STL_TYPE c++_static)
 endif()
 
-if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-    # Check if ThinLTO or LTO is suppported
+if (USE_FULL_LTO_ENABLED AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "USE_FULL_LTO is ON, attempting to enable LTO/ThinLTO")
     include(CheckIPOSupported)
     include(CheckCCompilerFlag)
     include(CheckCXXCompilerFlag)
 
     check_ipo_supported(RESULT LTOSupported OUTPUT LTOError)
-
     check_c_compiler_flag("-flto" HAS_LTO_C)
     check_cxx_compiler_flag("-flto" HAS_LTO_CXX)
 
     if (LTOSupported OR (HAS_LTO_C AND HAS_LTO_CXX))
-    # Check ThinLTO
-    check_c_compiler_flag("-flto=thin" HAS_THINLTO_C)
-    check_cxx_compiler_flag("-flto=thin" HAS_THINLTO_CXX)
-    if (HAS_THINLTO_C AND HAS_THINLTO_CXX)
-        message(STATUS "ThinLTO supported, using -flto=thin")
-
-        add_compile_options(-flto=thin)
-        add_link_options(-flto=thin)
+        check_c_compiler_flag("-flto=thin" HAS_THINLTO_C)
+        check_cxx_compiler_flag("-flto=thin" HAS_THINLTO_CXX)
+        if (HAS_THINLTO_C AND HAS_THINLTO_CXX)
+            message(STATUS "ThinLTO supported, using -flto=thin")
+            add_compile_options(-flto=thin)
+            add_link_options(-flto=thin)
+        else()
+            message(STATUS "ThinLTO not available, fallback to full LTO via CMAKE_INTERPROCEDURAL_OPTIMIZATION")
+            set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+        endif()
     else()
-        # ThinLTO is not supported
-        message(STATUS "ThinLTO not available, fallback to CMAKE IPO")
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+        message(WARNING "IPO/LTO not supported: ${LTOError}")
+        if (USE_FULL_LTO_ENABLED)
+            message(WARNING "Force enabling -flto despite detection failure")
+            add_compile_options(-flto)
+            add_link_options(-flto)
+        endif()
     endif()
-    else()
-    message(STATUS "IPO not supported: ${LTOError}")
-    endif()
+else()
+    message(STATUS "LTO disabled (USE_FULL_LTO=${USE_FULL_LTO})")
 endif()
-
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MATCHES "AppleClang")
     add_compile_options(-O3 -ffunction-sections -fdata-sections)
     add_link_options(-Wl,--gc-sections)
+    
+    if (USE_EXTRA_OPTIMIZATIONS_ENABLED AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(STATUS "Enabling extra performance optimizations")
+        add_compile_options(
+            -fomit-frame-pointer
+            -fno-semantic-interposition
+            -fmerge-all-constants
+            -fno-math-errno
+            -fno-signed-zeros
+            -fno-trapping-math
+            -fno-exceptions
+            -fno-unwind-tables
+            -fno-asynchronous-unwind-tables
+            -fstrict-aliasing
+        )
+        add_link_options(
+            -Wl,--as-needed
+            -Wl,--icf=all
+            -Wl,--hash-style=gnu
+        )
+    endif()
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-#    add_compile_options(/O2)
-else ()
-    add_compile_options(-O2)
+    add_compile_options(/O2)
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
@@ -109,7 +149,6 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     gl/glsl/glsl_for_es.cpp
     gl/glsl/cache.cpp
     gl/FSR1/FSR1.cpp
-
     gl/vertexattrib.cpp
     glx/lookup.cpp
     egl/egl.cpp
@@ -133,7 +172,6 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 if(MACOS)
-    # iOS
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         "-F${CMAKE_SOURCE_DIR}/external"
         "-framework libEGL"
@@ -143,7 +181,6 @@ if(MACOS)
         "-framework QuartzCore"
     )
 else()
-    # Android
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         android
         log
