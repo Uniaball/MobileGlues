@@ -13,15 +13,20 @@
 #include "../../config/settings.h"
 
 #include <list>
-#include <array>
 #include <string>
 #include <cstdint>
+#include <unordered_map>
+
+#include "3rdparty/xxhash/xxhash.h"
 
 class Cache {
 public:
     Cache();
+    ~Cache() = default;
+
     const char* get(const char* glsl);
     void put(const char* glsl, const char* essl);
+
     bool load();
     void save();
 
@@ -29,21 +34,18 @@ public:
 
 private:
     struct CacheEntry {
-        std::array<uint8_t, 32> sha256;
+        uint64_t hash;
         std::string essl;
         size_t size;
     };
 
-    struct SHA256Hash {
-        size_t operator()(const std::array<uint8_t, 32>& key) const;
-    };
+    using ListIterator = std::list<CacheEntry>::iterator;
 
     std::list<CacheEntry> cacheList;
-    using ListIterator = std::list<CacheEntry>::iterator;
-    UnorderedMap<std::array<uint8_t, 32>, ListIterator, SHA256Hash> cacheMap;
+    std::unordered_map<uint64_t, ListIterator> cacheMap;
     size_t cacheSize = 0;
 
-    static std::array<uint8_t, 32> computeSHA256(const char* data);
+    static uint64_t computeXXHash(const char* data);
     void maintainCacheSize();
 };
 

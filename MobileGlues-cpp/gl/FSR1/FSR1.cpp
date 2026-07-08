@@ -3,7 +3,7 @@
 // Licensed under the GNU Lesser General Public License v2.1:
 //   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
 // SPDX-License-Identifier: LGPL-2.1-only
-// End of Source File Header
+
 #include "FSR1.h"
 #include "FSRShaderSource.h"
 #include "../../config/settings.h"
@@ -16,7 +16,6 @@ struct GLStateGuard {
     GLint prevArrayBuffer;
     GLint prevActiveTexture;
     GLint prevTexture;
-    // GLint prevViewport[4];
     GLint prevReadFBO;
     GLint prevDrawFBO;
     GLint prevRenderbuffer;
@@ -28,7 +27,6 @@ struct GLStateGuard {
         GLES.glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTexture);
         GLES.glActiveTexture(prevActiveTexture);
         GLES.glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTexture);
-        // GLES.glGetIntegerv(GL_VIEWPORT, prevViewport);
         GLES.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
         GLES.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
         GLES.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
@@ -40,7 +38,6 @@ struct GLStateGuard {
         GLES.glBindBuffer(GL_ARRAY_BUFFER, prevArrayBuffer);
         GLES.glActiveTexture(prevActiveTexture);
         GLES.glBindTexture(GL_TEXTURE_2D, prevTexture);
-        // GLES.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
         GLES.glBindRenderbuffer(GL_RENDERBUFFER, prevRenderbuffer);
         GLES.glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
         GLES.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
@@ -69,7 +66,11 @@ namespace FSR1_Context {
     bool g_resolutionChanged = false;
     GLsizei g_pendingWidth = 0;
     GLsizei g_pendingHeight = 0;
-} // namespace FSR1_Context
+
+    GLint g_uInputTexLoc = -1;
+    GLint g_uConst0Loc = -1;
+    GLint g_uViewportSizeLoc = -1;
+}
 
 void CalculateTargetResolution(FSR1_Quality_Preset preset, int renderWidth, int renderHeight, int* targetWidth,
                                int* targetHeight) {
@@ -129,10 +130,11 @@ void CalculateRenderResolution(FSR1_Quality_Preset preset, int targetWidth, int 
 }
 
 GLuint CompileFSRShader() {
+    if (FSR1_Context::g_fsrProgram != 0) return FSR1_Context::g_fsrProgram;
+
     GLuint program = glCreateProgram();
 
     GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    LOG_D("Vertex shader source:\n%s", FSR_VSSource);
     glShaderSource(vs, 1, &FSR_VSSource, nullptr);
     glCompileShader(vs);
 
@@ -146,7 +148,6 @@ GLuint CompileFSRShader() {
     }
 
     GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-    LOG_D("Fragment shader source:\n%s", FSR_FSSource);
     glShaderSource(fs, 1, &FSR_FSSource, nullptr);
     glCompileShader(fs);
 
@@ -173,13 +174,17 @@ GLuint CompileFSRShader() {
     glDeleteShader(vs);
     glDeleteShader(fs);
 
+    FSR1_Context::g_uInputTexLoc = glGetUniformLocation(program, "uInputTex");
+    FSR1_Context::g_uConst0Loc = glGetUniformLocation(program, "uConst0");
+    FSR1_Context::g_uViewportSizeLoc = glGetUniformLocation(program, "uViewportSize");
+
+    FSR1_Context::g_fsrProgram = program;
     return program;
 }
 
 void InitFullscreenQuad() {
     GLStateGuard state;
     const float quadVertices[] = {-1.0f, 1.0f, 0.0f, 1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f, 0.0f,
-
                                   -1.0f, 1.0f, 0.0f, 1.0f, 1.0f,  -1.0f, 1.0f, 0.0f, 1.0f, 1.0f,  1.0f, 1.0f};
 
     GLES.glGenVertexArrays(1, &FSR1_Context::g_quadVAO);
@@ -202,19 +207,11 @@ void InitFullscreenQuad() {
 
 bool fsrInitialized = false;
 void InitFSRResources() {
+    if (fsrInitialized) return;
     fsrInitialized = true;
     GLStateGuard state;
 
     FSR1_Context::g_fsrProgram = CompileFSRShader();
-
-    GLint inputTexLoc = glGetUniformLocation(FSR1_Context::g_fsrProgram, "uInputTex");
-    GLint const0Loc = glGetUniformLocation(FSR1_Context::g_fsrProgram, "uConst0");
-    GLint viewportSizeLoc = glGetUniformLocation(FSR1_Context::g_fsrProgram, "uViewportSize");
-
-    glUseProgram(FSR1_Context::g_fsrProgram);
-    glUniform1i(inputTexLoc, 0);
-    glUseProgram(0);
-
     InitFullscreenQuad();
 
     GLES.glGenTextures(1, &FSR1_Context::g_renderTexture);
@@ -273,10 +270,12 @@ void RecreateFSRFBO() {
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+
     GLES.glGenRenderbuffers(1, &FSR1_Context::g_depthStencilRBO);
     GLES.glBindRenderbuffer(GL_RENDERBUFFER, FSR1_Context::g_depthStencilRBO);
     GLES.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, FSR1_Context::g_renderWidth,
                                FSR1_Context::g_renderHeight);
+
     GLES.glGenFramebuffers(1, &FSR1_Context::g_renderFBO);
     GLES.glBindFramebuffer(GL_FRAMEBUFFER, FSR1_Context::g_renderFBO);
     GLES.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, FSR1_Context::g_renderTexture, 0);
@@ -299,12 +298,7 @@ void RecreateFSRFBO() {
 
     GLES.glBindFramebuffer(GL_FRAMEBUFFER, FSR1_Context::g_renderFBO);
     GLES.glViewport(0, 0, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
-
-    LOG_D("FSR1 resources recreated: render %dx%d, target %dx%d", FSR1_Context::g_renderWidth,
-          FSR1_Context::g_renderHeight, FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight);
 }
-
-std::vector<std::pair<GLsizei, GLsizei>> g_viewportStack;
 
 void ApplyFSR() {
     GLStateGuard state;
@@ -323,13 +317,14 @@ void ApplyFSR() {
                         float(FSR1_Context::g_renderHeight) / FSR1_Context::g_targetHeight,
                         1.0f / FSR1_Context::g_targetWidth, 1.0f / FSR1_Context::g_targetHeight};
 
-    GLES.glUniform1i(glGetUniformLocation(FSR1_Context::g_fsrProgram, "uInputTex"), 0);
-    GLES.glUniform4fv(glGetUniformLocation(FSR1_Context::g_fsrProgram, "uConst0"), 1,
-                      reinterpret_cast<const GLfloat*>(&const0));
+    if (FSR1_Context::g_uInputTexLoc >= 0)
+        GLES.glUniform1i(FSR1_Context::g_uInputTexLoc, 0);
+    if (FSR1_Context::g_uConst0Loc >= 0)
+        GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, reinterpret_cast<const GLfloat*>(&const0));
 
     glm::vec2 viewportSize = {(float)FSR1_Context::g_renderWidth, (float)FSR1_Context::g_renderHeight};
-    GLES.glUniform2fv(glGetUniformLocation(FSR1_Context::g_fsrProgram, "uViewportSize"), 1,
-                      reinterpret_cast<const GLfloat*>(&viewportSize));
+    if (FSR1_Context::g_uViewportSizeLoc >= 0)
+        GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, reinterpret_cast<const GLfloat*>(&viewportSize));
 
     GLES.glBindVertexArray(FSR1_Context::g_quadVAO);
     GLES.glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -345,26 +340,27 @@ void ApplyFSR() {
 }
 
 void CheckResolutionChange() {
+    static GLsizei lastWidth = 0, lastHeight = 0;
+    static EGLDisplay display = eglGetCurrentDisplay();
+    static EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
     GLsizei width = 0, height = 0;
-    LOAD_EGL(eglQuerySurface);
-    static EGLDisplay display;
-    static EGLSurface surface;
-    if (!display || !surface) {
-        display = eglGetCurrentDisplay();
-        surface = eglGetCurrentSurface(EGL_DRAW);
+    eglQuerySurface(display, surface, EGL_WIDTH, &width);
+    eglQuerySurface(display, surface, EGL_HEIGHT, &height);
+
+    if (width != lastWidth || height != lastHeight) {
+        lastWidth = width;
+        lastHeight = height;
+        OnResize(width, height);
     }
-    egl_eglQuerySurface(display, surface, EGL_WIDTH, &width);
-    egl_eglQuerySurface(display, surface, EGL_HEIGHT, &height);
-    OnResize(width, height);
 
     if (FSR1_Context::g_resolutionChanged) {
         FSR1_Context::g_resolutionChanged = false;
-        GLsizei width = FSR1_Context::g_pendingWidth;
-        GLsizei height = FSR1_Context::g_pendingHeight;
-        FSR1_Context::g_renderWidth = width;
-        FSR1_Context::g_renderHeight = height;
+        GLsizei w = FSR1_Context::g_pendingWidth;
+        GLsizei h = FSR1_Context::g_pendingHeight;
+        FSR1_Context::g_renderWidth = w;
+        FSR1_Context::g_renderHeight = h;
 
-        CalculateTargetResolution(global_settings.fsr1_setting, width, height,
+        CalculateTargetResolution(global_settings.fsr1_setting, w, h,
                                   reinterpret_cast<int*>(&FSR1_Context::g_targetWidth),
                                   reinterpret_cast<int*>(&FSR1_Context::g_targetHeight));
         RecreateFSRFBO();
@@ -374,7 +370,6 @@ void CheckResolutionChange() {
 
 void OnResize(int width, int height) {
     if (FSR1_Context::g_renderWidth == width && FSR1_Context::g_renderHeight == height) return;
-
     FSR1_Context::g_pendingWidth = width;
     FSR1_Context::g_pendingHeight = height;
     FSR1_Context::g_resolutionChanged = true;

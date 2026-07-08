@@ -3,7 +3,6 @@
 // Licensed under the GNU Lesser General Public License v2.1:
 //   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
 // SPDX-License-Identifier: LGPL-2.1-only
-// End of Source File Header
 
 #include "config/settings.h"
 #include "egl/egl.h"
@@ -14,6 +13,9 @@
 #include "gl/mg.h"
 #include "gles/loader.h"
 #include "includes.h"
+#include "gl/buffer.h"
+#include "gl/texture.h"
+#include "gl/framebuffer.h"
 #include <cerrno>
 #include <cstring>
 #include <sys/stat.h>
@@ -58,6 +60,11 @@ void proc_init() {
     show_license();
 
     init_settings();
+
+    InitBufferMap(1024);
+    InitVertexArrayMap(512);
+    InitTextureMap(512);
+    InitFramebufferMap(256);
 
     load_libs();
     init_target_egl();
