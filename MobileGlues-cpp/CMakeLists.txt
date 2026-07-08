@@ -66,18 +66,24 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_COMPILER_ID MATC
         message(STATUS "    -fno-math-errno          : don't set errno for math functions")
         message(STATUS "    -fno-signed-zeros        : ignore sign of zero")
         message(STATUS "    -fno-trapping-math       : don't trap floating point exceptions")
-        message(STATUS "    -fno-exceptions          : disable C++ exceptions")
         message(STATUS "    -fno-unwind-tables       : don't generate unwind tables")
         message(STATUS "    -fno-asynchronous-unwind-tables : no async unwind tables")
         message(STATUS "    -fstrict-aliasing        : enable strict aliasing optimizations")
+        message(STATUS "    -fno-rtti                : disable RTTI")
+        message(STATUS "    -march=armv8.2-a+fp16+rcpc+dotprod+crypto : target ARMv8.2 with extensions")
+        message(STATUS "    -mtune=cortex-a76        : optimize for Cortex-A76")
+        message(STATUS "    -D_NDK_MATH_NO_SOFT=1   : force hardware floating point")
+        message(STATUS "    -ffast-math              : aggressive floating point optimizations (may affect precision)")
         message(STATUS "")
         message(STATUS "  Link flags:")
         message(STATUS "    -Wl,--as-needed          : only link used libraries")
         message(STATUS "    -Wl,--icf=all            : merge identical code sections")
         message(STATUS "    -Wl,--hash-style=gnu     : use GNU hash style")
+        message(STATUS "    -Wl,-Bsymbolic           : prefer local symbols")
+        message(STATUS "    -Wl,--exclude-libs,ALL   : hide all static library symbols")
         message(STATUS "============================================================")
         message(STATUS "")
-        
+
         add_compile_options(
             -fomit-frame-pointer
             -fno-semantic-interposition
@@ -85,18 +91,31 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_COMPILER_ID MATC
             -fno-math-errno
             -fno-signed-zeros
             -fno-trapping-math
-            -fno-exceptions
             -fno-unwind-tables
             -fno-asynchronous-unwind-tables
             -fstrict-aliasing
+            -fno-rtti
+            -march=armv8.2-a+fp16+rcpc+dotprod+crypto
+            -mtune=cortex-a76
+            -D_NDK_MATH_NO_SOFT=1
+            -ffast-math
         )
         add_link_options(
             -Wl,--as-needed
             -Wl,--icf=all
             -Wl,--hash-style=gnu
+            -Wl,-Bsymbolic
+            -Wl,--exclude-libs,ALL
         )
     else()
-        message(STATUS "Extra optimizations disabled (USE_EXTRA_OPTIMIZATIONS=${USE_EXTRA_OPTIMIZATIONS})")
+        message(STATUS "")
+        message(STATUS "============================================================")
+        message(STATUS "  EXTRA OPTIMIZATIONS DISABLED")
+        message(STATUS "============================================================")
+        message(STATUS "  USE_EXTRA_OPTIMIZATIONS = ${USE_EXTRA_OPTIMIZATIONS}")
+        message(STATUS "  CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
+        message(STATUS "============================================================")
+        message(STATUS "")
     endif()
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     add_compile_options(/O2)
@@ -156,6 +175,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 if(MACOS)
+    # iOS
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         "-F${CMAKE_SOURCE_DIR}/external"
         "-framework libEGL"
@@ -165,6 +185,7 @@ if(MACOS)
         "-framework QuartzCore"
     )
 else()
+    # Android
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         android
         log
