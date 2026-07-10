@@ -6,6 +6,8 @@
 // End of Source File Header
 
 #include <unistd.h>
+#include <cstdarg>
+#include <cstdio>
 #include "mg.h"
 
 #define DEBUG 0

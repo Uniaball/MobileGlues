@@ -15,7 +15,7 @@
 #include <cctype>
 
 #if !defined(__APPLE__)
-#include <__stddef_size_t.h>
+#include <stddef.h>
 #else
 typedef unsigned long size_t;
 #endif

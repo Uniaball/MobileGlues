@@ -12,8 +12,10 @@
 #include <cstring>
 #include <vector>
 
-#ifndef __APPLE__
+#ifdef __ANDROID__
 #include <android/log.h>
+#endif
+#ifndef __APPLE__
 #include <malloc.h>
 #endif
 

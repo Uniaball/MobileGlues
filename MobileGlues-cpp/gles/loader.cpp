@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <cstdio>
+#include <limits.h>
 #include "loader.h"
 #include "../includes.h"
 #include "loader.h"
