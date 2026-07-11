@@ -578,6 +578,7 @@ static std::vector<unsigned int> glsl_to_spirv(GLenum shader_type, int glsl_vers
     shader.setEnvClient(EShClientOpenGL, EShTargetOpenGL_450);
     shader.setEnvTarget(EShTargetSpv, EShTargetSpv_1_5);
     shader.setAutoMapLocations(true);
+    shader.setPreamble("#undef VULKAN\n");
     shader.setAutoMapBindings(true);
     TBuiltInResource TBuiltInResource_resources = InitResources();
     if (!shader.parse(&TBuiltInResource_resources, glsl_version, true, EShMsgDefault)) {
