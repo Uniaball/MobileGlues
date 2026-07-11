@@ -42,6 +42,7 @@ typedef int android_LogPriority;
 int __android_log_print(int prio, const char* tag, const char* fmt, ...);
 #endif
 
+// Always-on error logs (keep in release builds)
 #define LOG_E(...)                                                                                                     \
     {                                                                                                                  \
         __android_log_print(ANDROID_LOG_ERROR, RENDERERNAME, __VA_ARGS__);                                             \
@@ -65,13 +66,14 @@ int __android_log_print(int prio, const char* tag, const char* fmt, ...);
     }
 
 #if !(DEBUG || GLOBAL_DEBUG)
-#define LOG() ((void)0)
-#define LOG_D(...) ((void)0)
-#define LOG_D_N(...) ((void)0)
-#define LOG_W(...) ((void)0)
-#define LOG_V(...) ((void)0)
-#define LOG_I(...) ((void)0)
-#define log_unique_function(...) ((void)0)
+// Release builds: all debug logs become no-ops
+#define LOG() do {} while(0);
+#define LOG_D(...) do {} while(0);
+#define LOG_D_N(...) do {} while(0);
+#define LOG_W(...) do {} while(0);
+#define LOG_V(...) do {} while(0);
+#define LOG_I(...) do {} while(0);
+#define log_unique_function(...) do {} while(0);
 #else
 #if GLOBAL_DEBUG_FORCE_OFF
 #define LOG()                                                                                                          \

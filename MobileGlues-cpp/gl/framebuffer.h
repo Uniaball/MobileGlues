@@ -10,16 +10,18 @@
 
 #include <GL/gl.h>
 #include <cstddef>
+#include <array>
 
 struct attachment_t {
     GLenum textarget;
     GLuint texture;
     GLint level;
 };
+
 struct framebuffer_t {
     bool initialized = false;
     bool color_attachments_all_none = false;
-    attachment_t* color_attachments = nullptr;
+    std::array<attachment_t, 8> color_attachments{};
     attachment_t depth_attachment = {0};
     attachment_t stencil_attachment = {0};
 };

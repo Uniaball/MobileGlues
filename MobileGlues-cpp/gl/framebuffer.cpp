@@ -14,28 +14,12 @@
 
 #define DEBUG 0
 
-static GLint MAX_COLOR_ATTACHMENTS = 0;
-static GLint MAX_DRAW_BUFFERS = 0;
+static const GLint MAX_COLOR_ATTACHMENTS = 8;
+static const GLint MAX_DRAW_BUFFERS = 8;
+
 GLuint current_draw_fbo = 0;
 GLuint current_read_fbo = 0;
 std::vector<framebuffer_t> framebuffers;
-
-void ensure_max_attachments() {
-    if (MAX_COLOR_ATTACHMENTS == 0) {
-        GLES.glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &MAX_COLOR_ATTACHMENTS);
-        MAX_COLOR_ATTACHMENTS = MAX_COLOR_ATTACHMENTS > 0 ? MAX_COLOR_ATTACHMENTS : 8;
-#if DEBUG
-        LOG_D("MAX_COLOR_ATTACHMENTS: %d", MAX_COLOR_ATTACHMENTS);
-#endif
-    }
-    if (MAX_DRAW_BUFFERS == 0) {
-        GLES.glGetIntegerv(GL_MAX_DRAW_BUFFERS, &MAX_DRAW_BUFFERS);
-        MAX_DRAW_BUFFERS = MAX_DRAW_BUFFERS > 0 ? MAX_DRAW_BUFFERS : 8;
-#if DEBUG
-        LOG_D("MAX_DRAW_BUFFERS: %d", MAX_DRAW_BUFFERS);
-#endif
-    }
-}
 
 framebuffer_t& get_framebuffer(GLuint id) {
     if (id >= framebuffers.size()) {
@@ -50,12 +34,7 @@ void InitFramebufferMap(size_t expectedSize) {
 
 void init_framebuffer(framebuffer_t& fbo) {
     if (!fbo.initialized) {
-        fbo.color_attachments = new attachment_t[MAX_COLOR_ATTACHMENTS];
-        std::fill_n(fbo.color_attachments, MAX_COLOR_ATTACHMENTS, attachment_t{0});
         fbo.initialized = true;
-#if DEBUG
-        LOG_D("Initialized FBO %d", &fbo - framebuffers.data());
-#endif
     }
 }
 
@@ -63,8 +42,6 @@ void glBindFramebuffer(GLenum target, GLuint framebuffer) {
 #if DEBUG
     LOG()
 #endif
-    ensure_max_attachments();
-    
     auto& fbo = get_framebuffer(framebuffer);
     
     if (framebuffer == 0 && target != GL_READ_FRAMEBUFFER) {
@@ -131,8 +108,6 @@ void glDrawBuffer(GLenum buffer) {
 #if DEBUG
     LOG()
     LOG_D("glDrawBuffer %d", buffer)
-    // GLint currentFBO;
-    // GLES.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &currentFBO);
 #endif
     
     if (current_draw_fbo == 0) {
@@ -248,13 +223,6 @@ void cleanup_framebuffers() {
 #if DEBUG
     LOG_D("Cleaning up framebuffers");
 #endif
-    
-    for (auto& fbo : framebuffers) {
-        if (fbo.color_attachments) {
-            delete[] fbo.color_attachments;
-            fbo.color_attachments = nullptr;
-        }
-    }
     
     framebuffers.clear();
     current_draw_fbo = 0;

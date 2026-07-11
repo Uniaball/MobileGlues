@@ -27,8 +27,7 @@ static std::vector<size_t> g_buffer_datasize;
 
 static std::vector<GLuint> g_element_array_buffer_per_vao;
 
-// --- 适度预分配，提高性能 ---
-constexpr int INIT_CAPACITY = 128;
+constexpr int INIT_CAPACITY = 1024;
 
 static bool g_buffer_inited = false;
 static bool g_array_inited = false;
@@ -51,7 +50,6 @@ enum BindingIndex : int {
 static std::array<GLuint, BINDING_COUNT> g_bound_buffers_arr = {0};
 
 
-// --- 适度指数扩容 ---
 static inline void ensure_buffer_capacity(GLuint id) {
     if (g_gen_buffers.size() <= id) {
         size_t new_capacity = std::max((size_t)(id + 1), g_gen_buffers.size() * 2);
@@ -75,6 +73,7 @@ void InitBufferMap(size_t expectedSize) {
         g_gen_buffers.reserve(reserveSize);
         g_gen_buffer_exists.reserve(reserveSize);
         g_buffer_datasize.reserve(reserveSize);
+        g_free_buffer_ids.reserve(reserveSize);
         g_gen_buffers.resize(1, 0);
         g_gen_buffer_exists.resize(1, 0);
         g_buffer_datasize.resize(1, 0);
@@ -88,6 +87,7 @@ void InitVertexArrayMap(size_t expectedSize) {
         g_gen_arrays.reserve(reserveSize);
         g_gen_array_exists.reserve(reserveSize);
         g_element_array_buffer_per_vao.reserve(reserveSize);
+        g_free_array_ids.reserve(reserveSize);
         g_gen_arrays.resize(1, 0);
         g_gen_array_exists.resize(1, 0);
         g_element_array_buffer_per_vao.resize(1, 0);
@@ -269,7 +269,6 @@ static GLenum get_binding_query(GLenum target) {
     }
 }
 
-// --- 批量分配 ---
 void glGenBuffers(GLsizei n, GLuint* buffers) {
     LOG()
     LOG_D("glGenBuffers(%i, %p)", n, buffers)
@@ -689,7 +688,6 @@ void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length)
     if (!global_settings.buffer_coherent_as_flush) GLES.glFlushMappedBufferRange(target, offset, length);
 }
 
-// --- glGenVertexArrays 批量预分配优化 ---
 void glGenVertexArrays(GLsizei n, GLuint* arrays) {
     LOG()
     LOG_D("glGenVertexArrays(%i, %p)", n, arrays)
