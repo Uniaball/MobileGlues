@@ -23,7 +23,8 @@ std::string bufSampelerName;
 extern UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
 extern UnorderedMap<GLuint, bool> program_map_is_atomic_counter_emulated;
 
-// 优化1：为 SamplerInfo 的 uniform location 查找和采样器查找增加缓存，避免重复查询
+bool g_current_program_needs_sampler_emulation = false;
+
 struct UniformLocationCache {
     UnorderedMap<GLuint, GLint> widthLoc;
     UnorderedMap<GLuint, GLint> heightLoc;
@@ -33,15 +34,13 @@ static UniformLocationCache g_uniformCache;
 
 UnorderedMap<GLuint, SamplerInfo> g_samplerCacheForSamplerBuffer;
 
-// 优化2：线程局部索引缓冲区，减少 malloc/free 频率
-static thread_local std::unique_ptr<std::vector<uint8_t>> g_tempIndexBuffer;
+static thread_local std::vector<uint8_t> g_tempIndexBuffer;
 
 void setupBufferTextureUniforms(GLuint program) {
     LOG_D("setupBufferTextureUniforms, program: %d", program);
 
     if (!program_map_is_sampler_buffer_emulated[program]) return;
 
-    // 缓存 uniform location 和 sampler location
     GLint locWidth = -2, locHeight = -2;
     auto widthIt = g_uniformCache.widthLoc.find(program);
     auto heightIt = g_uniformCache.heightLoc.find(program);
@@ -106,7 +105,7 @@ void setupBufferTextureUniforms(GLuint program) {
 
 void prepareForDraw() {
     LOG_D("prepareForDraw...")
-    if (hardware->emulate_texture_buffer) {
+    if (hardware->emulate_texture_buffer && g_current_program_needs_sampler_emulation) {
         setupBufferTextureUniforms(gl_state->current_program);
     }
 }
@@ -177,7 +176,6 @@ void glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const voi
     prepareForDraw();
     if (hardware->es_version < 320 && !g_gles_caps.GL_EXT_draw_elements_base_vertex &&
         !g_gles_caps.GL_OES_draw_elements_base_vertex) {
-        // TODO: use indirect drawing for GLES 3.1
         LOG_D("Emulating glDrawElementsBaseVertex")
         GLint prevElementBuffer;
         GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevElementBuffer);
@@ -202,10 +200,12 @@ void glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const voi
             return;
         }
 
-        // 优化：线程局部缓冲区
-        if (!g_tempIndexBuffer) g_tempIndexBuffer = std::make_unique<std::vector<uint8_t>>();
-        g_tempIndexBuffer->resize(count * indexSize);
-        void* tempIndices = g_tempIndexBuffer->data();
+        size_t needed = count * indexSize;
+        if (g_tempIndexBuffer.capacity() < needed) {
+            g_tempIndexBuffer.reserve(needed * 2);
+        }
+        g_tempIndexBuffer.resize(needed);
+        void* tempIndices = g_tempIndexBuffer.data();
 
         if (prevElementBuffer != 0) {
             GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevElementBuffer);
@@ -222,7 +222,6 @@ void glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const voi
             memcpy(tempIndices, indices, count * indexSize);
         }
 
-        // 用指针减少分支
         switch (type) {
         case GL_UNSIGNED_INT: {
             auto p = reinterpret_cast<GLuint*>(tempIndices);

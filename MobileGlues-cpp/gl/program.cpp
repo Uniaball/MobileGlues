@@ -26,6 +26,8 @@ UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
 extern UnorderedMap<GLuint, bool> shader_map_is_atomic_counter_emulated;
 UnorderedMap<GLuint, bool> program_map_is_atomic_counter_emulated;
 
+bool g_current_program_needs_sampler_emulation = false;
+
 enum class ShouldGenerateFSState : int {
     Never = 0,
     Maybe = 1,
@@ -176,7 +178,7 @@ void glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
         if (it != g_programIgnoreErrorLevel.end()) {
             ignore_level = it->second;
         }
-        if (ignore_level >= IgnoreErrorLevel::Partial) {
+        if (ignore_level >= static_cast<int>(IgnoreErrorLevel::Partial)) {
             GLchar infoLog[512];
             GLES.glGetProgramInfoLog(program, 512, nullptr, infoLog);
             LOG_W_FORCE("Program %d linking failed: \n%s", program, infoLog);
@@ -193,6 +195,12 @@ void glUseProgram(GLuint program) {
     LOG_D("glUseProgram(%d)", program)
     if (program != gl_state->current_program) {
         gl_state->current_program = program;
+        if (hardware->emulate_texture_buffer) {
+            auto it = program_map_is_sampler_buffer_emulated.find(program);
+            g_current_program_needs_sampler_emulation = (it != program_map_is_sampler_buffer_emulated.end() && it->second);
+        } else {
+            g_current_program_needs_sampler_emulation = false;
+        }
         GLES.glUseProgram(program);
         CHECK_GL_ERROR
     }
@@ -231,7 +239,7 @@ GLuint glCreateProgram() {
     LOG_D("glCreateProgram")
     GLuint program = GLES.glCreateProgram();
     if (program != 0) {
-        g_programIgnoreErrorLevel[program] = global_settings.ignore_error;
+        g_programIgnoreErrorLevel[program] = static_cast<int>(global_settings.ignore_error);
         if (hardware->emulate_texture_buffer) {
             program_map_is_sampler_buffer_emulated[program] = false;
             if (g_samplerCacheForSamplerBuffer.find(program) != g_samplerCacheForSamplerBuffer.end()) {

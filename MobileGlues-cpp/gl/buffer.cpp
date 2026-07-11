@@ -32,6 +32,9 @@ constexpr int INIT_CAPACITY = 1024;
 static bool g_buffer_inited = false;
 static bool g_array_inited = false;
 
+static GLuint g_cached_vao = 0;
+static GLuint g_cached_ibo = 0;
+
 enum BindingIndex : int {
     BI_ARRAY_BUFFER = 0,
     BI_ATOMIC_COUNTER,
@@ -48,7 +51,6 @@ enum BindingIndex : int {
     BINDING_COUNT
 };
 static std::array<GLuint, BINDING_COUNT> g_bound_buffers_arr = {0};
-
 
 static inline void ensure_buffer_capacity(GLuint id) {
     if (g_gen_buffers.size() <= id) {
@@ -150,6 +152,9 @@ GLuint find_bound_array() {
 void update_vao_ibo_binding(GLuint vao, GLuint ibo) {
     ensure_array_capacity(vao);
     g_element_array_buffer_per_vao[vao] = ibo;
+    if (vao == g_cached_vao) {
+        g_cached_ibo = ibo;
+    }
 }
 
 void set_buffer_data_size(GLuint buffer, size_t size) {
@@ -180,30 +185,34 @@ static inline int binding_target_to_index(GLenum target) {
     }
 }
 
+static inline int binding_query_to_index(GLenum pname) {
+    switch (pname) {
+    case GL_ARRAY_BUFFER_BINDING: return BI_ARRAY_BUFFER;
+    case GL_ATOMIC_COUNTER_BUFFER_BINDING: return BI_ATOMIC_COUNTER;
+    case GL_COPY_READ_BUFFER_BINDING: return BI_COPY_READ;
+    case GL_COPY_WRITE_BUFFER_BINDING: return BI_COPY_WRITE;
+    case GL_DRAW_INDIRECT_BUFFER_BINDING: return BI_DRAW_INDIRECT;
+    case GL_DISPATCH_INDIRECT_BUFFER_BINDING: return BI_DISPATCH_INDIRECT;
+    case GL_ELEMENT_ARRAY_BUFFER_BINDING: return BI_ELEMENT_ARRAY;
+    case GL_PIXEL_PACK_BUFFER_BINDING: return BI_PIXEL_PACK;
+    case GL_PIXEL_UNPACK_BUFFER_BINDING: return BI_PIXEL_UNPACK;
+    case GL_SHADER_STORAGE_BUFFER_BINDING: return BI_SHADER_STORAGE;
+    case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING: return BI_TRANSFORM_FEEDBACK;
+    case GL_UNIFORM_BUFFER_BINDING: return BI_UNIFORM_BUFFER;
+    default: return -1;
+    }
+}
+
 void set_bound_buffer_by_target(GLenum target, GLuint buffer) {
     int idx = binding_target_to_index(target);
     if (idx >= 0) g_bound_buffers_arr[idx] = buffer;
 }
 
 GLuint find_bound_buffer(GLenum key) {
-    GLenum target = 0;
-    switch (key) {
-    case GL_ARRAY_BUFFER_BINDING: target = GL_ARRAY_BUFFER; break;
-    case GL_ATOMIC_COUNTER_BUFFER_BINDING: target = GL_ATOMIC_COUNTER_BUFFER; break;
-    case GL_COPY_READ_BUFFER_BINDING: target = GL_COPY_READ_BUFFER; break;
-    case GL_COPY_WRITE_BUFFER_BINDING: target = GL_COPY_WRITE_BUFFER; break;
-    case GL_DRAW_INDIRECT_BUFFER_BINDING: target = GL_DRAW_INDIRECT_BUFFER; break;
-    case GL_DISPATCH_INDIRECT_BUFFER_BINDING: target = GL_DISPATCH_INDIRECT_BUFFER; break;
-    case GL_ELEMENT_ARRAY_BUFFER_BINDING: target = GL_ELEMENT_ARRAY_BUFFER; break;
-    case GL_PIXEL_PACK_BUFFER_BINDING: target = GL_PIXEL_PACK_BUFFER; break;
-    case GL_PIXEL_UNPACK_BUFFER_BINDING: target = GL_PIXEL_UNPACK_BUFFER; break;
-    case GL_SHADER_STORAGE_BUFFER_BINDING: target = GL_SHADER_STORAGE_BUFFER; break;
-    case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING: target = GL_TRANSFORM_FEEDBACK_BUFFER; break;
-    case GL_UNIFORM_BUFFER_BINDING: target = GL_UNIFORM_BUFFER; break;
-    default: target = 0; break;
+    if (key == GL_ELEMENT_ARRAY_BUFFER_BINDING) {
+        return g_cached_ibo;
     }
-    if (target == GL_ELEMENT_ARRAY_BUFFER) return get_ibo_by_vao(find_bound_array());
-    int idx = binding_target_to_index(target);
+    int idx = binding_query_to_index(key);
     if (idx >= 0) return g_bound_buffers_arr[idx];
     return 0;
 }
@@ -720,7 +729,11 @@ void glBindVertexArray(GLuint array) {
     LOG()
     LOG_D("glBindVertexArray(%d)", array)
     bound_array = array;
-    set_bound_buffer_by_target(GL_ELEMENT_ARRAY_BUFFER, get_ibo_by_vao(array));
+    
+    g_cached_vao = array;
+    g_cached_ibo = get_ibo_by_vao(array);
+    
+    set_bound_buffer_by_target(GL_ELEMENT_ARRAY_BUFFER, g_cached_ibo);
 
     if (!has_array(array) || array == 0) {
         LOG_D("Does not have va=%d found!", array)

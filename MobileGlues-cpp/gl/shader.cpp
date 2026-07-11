@@ -126,7 +126,7 @@ void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
         if (it != g_shaderInfos.end()) {
             ignore_level = it->second.ignore_error_level;
         }
-        if (ignore_level >= IgnoreErrorLevel::Partial) {
+        if (ignore_level >= static_cast<int>(IgnoreErrorLevel::Partial)) {
             GLchar infoLog[512];
             GLES.glGetShaderInfoLog(shader, 512, nullptr, infoLog);
             LOG_W_FORCE("Shader %d compilation failed: \n%s", shader, infoLog)
@@ -149,7 +149,7 @@ GLuint glCreateShader(GLenum shaderType) {
     GLuint shader = GLES.glCreateShader(shaderType);
 
     if (shader != 0) {
-        g_shaderInfos[shader].ignore_error_level = global_settings.ignore_error;
+        g_shaderInfos[shader].ignore_error_level = static_cast<int>(global_settings.ignore_error);
         if (hardware->emulate_texture_buffer) {
             shader_map_is_sampler_buffer_emulated[shader] = false;
         }
