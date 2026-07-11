@@ -18,6 +18,8 @@ int __android_log_print(int prio, const char* tag, const char* fmt, ...) {
 }
 #endif
 
+#if DEBUG || GLOBAL_DEBUG
+
 #define CASE(e)                                                                                                        \
     case e:                                                                                                            \
         return #e;
@@ -1126,4 +1128,18 @@ void log_unique_function(const char* func_name) {
 
     logged_functions.insert(func_str);
 }
+#endif
+
+#else // !(DEBUG || GLOBAL_DEBUG)
+
+const char* glEnumToString(GLenum e) {
+    return "unknown";
+}
+
+#if LOG_CALLED_FUNCS
+void log_unique_function(const char* func_name) {
+    (void)func_name;
+}
+#endif
+
 #endif
