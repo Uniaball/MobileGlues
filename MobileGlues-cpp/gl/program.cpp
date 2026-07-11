@@ -33,6 +33,8 @@ enum class ShouldGenerateFSState : int {
 };
 
 UnorderedMap<GLuint, ShouldGenerateFSState> program_map_should_generate_fs;
+std::unordered_map<GLuint, int> g_programIgnoreErrorLevel;
+std::unordered_map<GLuint, std::vector<std::pair<GLuint, std::string>>> g_programFragDataBindings;
 
 char* updateLayoutLocation(const char* esslSource, GLuint color, const char* name) {
     std::string shaderCode(esslSource);
@@ -54,54 +56,11 @@ void glBindFragDataLocation(GLuint program, GLuint color, const GLchar* name) {
     LOG()
     LOG_D("glBindFragDataLocation(%d, %d, %s)", program, color, name)
 
-    if (strlen(name) > 8 && strncmp(name, "outColor", 8) == 0) {
-        const char* numberStr = name + 8;
-        bool isNumber = true;
-        for (int i = 0; numberStr[i] != '\0'; ++i) {
-            if (!isdigit(numberStr[i])) {
-                isNumber = false;
-                break;
-            }
-        }
-
-        if (isNumber) {
-            unsigned int extractedColor = static_cast<unsigned int>(std::stoul(numberStr));
-            if (extractedColor == color) {
-                // outColor was bound in glsl process. exit now
-                LOG_D("Find outColor* with color *, skipping")
-                return;
-            }
-        }
-    }
-
-    char* origin_glsl = nullptr;
-    if (shaderInfo.frag_data_changed) {
-        size_t glslLen = strlen(shaderInfo.frag_data_changed_converted) + 1;
-        origin_glsl = (char*)malloc(glslLen);
-        if (origin_glsl == nullptr) {
-            LOG_E("Memory reallocation failed for frag_data_changed_converted\n")
-            return;
-        }
-        strcpy(origin_glsl, shaderInfo.frag_data_changed_converted);
-    } else {
-        size_t glslLen = shaderInfo.converted.length() + 1;
-        origin_glsl = (char*)malloc(glslLen);
-        if (origin_glsl == nullptr) {
-            LOG_E("Memory reallocation failed for converted\n")
-            return;
-        }
-        strcpy(origin_glsl, shaderInfo.converted.c_str());
-    }
-
-    char* result_glsl = updateLayoutLocation(origin_glsl, color, name);
-    free(origin_glsl);
-
-    shaderInfo.frag_data_changed_converted = result_glsl;
-    shaderInfo.frag_data_changed = 1;
+    g_programFragDataBindings[program].push_back({color, std::string(name)});
 }
 
 static std::string DefaultFSSource;
-static unsigned CurrentDefaultFSSourceVersion = 0; // the version (hardware->es_version) may change during runtime
+static unsigned CurrentDefaultFSSourceVersion = 0;
 
 void GenerateDefaultFSSource() {
     if (CurrentDefaultFSSourceVersion != hardware->es_version) {
@@ -113,36 +72,69 @@ void GenerateDefaultFSSource() {
         ss << "void main() {\n";
         ss << "    fragColor = vec4(1.0, 1.0, 1.0, 1.0);\n";
         ss << "}\n";
-
         DefaultFSSource = ss.str();
     }
 }
 
-static UnorderedMap<unsigned, GLuint> DefaultFSMap; // essl version <-> shader id
+static UnorderedMap<unsigned, GLuint> DefaultFSMap;
+
 void glLinkProgram(GLuint program) {
     LOG()
-
     LOG_D("glLinkProgram(%d)", program)
-    if (!shaderInfo.converted.empty() && shaderInfo.frag_data_changed) {
-        GLES.glShaderSource(shaderInfo.id, 1, (const GLchar* const*)&shaderInfo.frag_data_changed_converted, nullptr);
-        GLES.glCompileShader(shaderInfo.id);
-        GLint status = 0;
-        GLES.glGetShaderiv(shaderInfo.id, GL_COMPILE_STATUS, &status);
-        if (status != GL_TRUE) {
-            char tmp[500];
-            GLES.glGetShaderInfoLog(shaderInfo.id, 500, nullptr, tmp);
-            LOG_E("Failed to compile patched shader, log:\n%s", tmp)
-        }
-        GLES.glDetachShader(program, shaderInfo.id);
-        GLES.glAttachShader(program, shaderInfo.id);
-        CHECK_GL_ERROR
-    }
-    shaderInfo.id = 0;
-    shaderInfo.converted = "";
-    shaderInfo.frag_data_changed_converted = nullptr;
-    shaderInfo.frag_data_changed = 0;
 
-    // Generate defaut fragment shader if needed
+    GLint numShaders = 0;
+    GLES.glGetProgramiv(program, GL_ATTACHED_SHADERS, &numShaders);
+    GLuint fragShader = 0;
+    if (numShaders > 0) {
+        std::vector<GLuint> shaders(numShaders);
+        GLES.glGetAttachedShaders(program, numShaders, nullptr, shaders.data());
+        for (GLuint s : shaders) {
+            GLint type = 0;
+            GLES.glGetShaderiv(s, GL_SHADER_TYPE, &type);
+            if (type == GL_FRAGMENT_SHADER) {
+                fragShader = s;
+                break;
+            }
+        }
+    }
+
+    if (fragShader != 0) {
+        auto it = g_shaderInfos.find(fragShader);
+        auto bindIt = g_programFragDataBindings.find(program);
+        if (it != g_shaderInfos.end()) {
+            auto& info = it->second;
+            if (bindIt != g_programFragDataBindings.end() && !bindIt->second.empty()) {
+                std::string modifiedSource = info.converted;
+                for (const auto& binding : bindIt->second) {
+                    char* patched = updateLayoutLocation(modifiedSource.c_str(), binding.first, binding.second.c_str());
+                    if (patched) {
+                        modifiedSource = patched;
+                        free(patched);
+                    }
+                }
+                info.frag_data_changed_converted = modifiedSource;
+                info.frag_data_changed = 1;
+            }
+
+            if (info.frag_data_changed) {
+                const char* src = info.frag_data_changed_converted.empty() ? info.converted.c_str() : info.frag_data_changed_converted.c_str();
+                GLES.glShaderSource(fragShader, 1, &src, nullptr);
+                GLES.glCompileShader(fragShader);
+                GLint status = 0;
+                GLES.glGetShaderiv(fragShader, GL_COMPILE_STATUS, &status);
+                if (status != GL_TRUE) {
+                    char tmp[500];
+                    GLES.glGetShaderInfoLog(fragShader, 500, nullptr, tmp);
+                    LOG_E("Failed to compile patched shader, log:\n%s", tmp)
+                }
+                info.frag_data_changed = 0;
+                info.frag_data_changed_converted.clear();
+            }
+        }
+    }
+
+    g_programFragDataBindings.erase(program);
+
     if (program_map_should_generate_fs[program] == ShouldGenerateFSState::Maybe) {
         GenerateDefaultFSSource();
         GLuint& default_fs = DefaultFSMap[CurrentDefaultFSSourceVersion];
@@ -150,9 +142,7 @@ void glLinkProgram(GLuint program) {
             default_fs = GLES.glCreateShader(GL_FRAGMENT_SHADER);
             const char* src = DefaultFSSource.c_str();
             GLES.glShaderSource(default_fs, 1, &src, nullptr);
-
             GLES.glCompileShader(default_fs);
-
             GLint success = 0;
             GLES.glGetShaderiv(default_fs, GL_COMPILE_STATUS, &success);
             if (!success) {
@@ -165,30 +155,36 @@ void glLinkProgram(GLuint program) {
                 default_fs = 0;
             }
         }
-
         if (default_fs) {
-            LOG_D("Try to attach missing default FS for program %u...", program);
+            LOG_D("Attaching missing default FS for program %u...", program);
             GLES.glAttachShader(program, default_fs);
+            program_map_should_generate_fs[program] = ShouldGenerateFSState::Never;
         }
     }
 
     GLES.glLinkProgram(program);
-
     CHECK_GL_ERROR
 }
 
 void glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
     LOG()
     GLES.glGetProgramiv(program, pname, params);
-    if (global_settings.ignore_error >= IgnoreErrorLevel::Partial &&
-        (pname == GL_LINK_STATUS || pname == GL_VALIDATE_STATUS) && !*params) {
-        GLchar infoLog[512];
-        GLES.glGetProgramInfoLog(program, 512, nullptr, infoLog);
 
-        LOG_W_FORCE("Program %d linking failed: \n%s", program, infoLog);
-        LOG_W_FORCE("Now try to cheat.");
-        *params = GL_TRUE;
+    if ((pname == GL_LINK_STATUS || pname == GL_VALIDATE_STATUS) && !*params) {
+        int ignore_level = 0;
+        auto it = g_programIgnoreErrorLevel.find(program);
+        if (it != g_programIgnoreErrorLevel.end()) {
+            ignore_level = it->second;
+        }
+        if (ignore_level >= IgnoreErrorLevel::Partial) {
+            GLchar infoLog[512];
+            GLES.glGetProgramInfoLog(program, 512, nullptr, infoLog);
+            LOG_W_FORCE("Program %d linking failed: \n%s", program, infoLog);
+            LOG_W_FORCE("Now try to cheat.");
+            *params = GL_TRUE;
+        }
     }
+
     CHECK_GL_ERROR
 }
 
@@ -234,15 +230,17 @@ GLuint glCreateProgram() {
     LOG()
     LOG_D("glCreateProgram")
     GLuint program = GLES.glCreateProgram();
-    if (hardware->emulate_texture_buffer) {
-        program_map_is_sampler_buffer_emulated[program] = false;
-        if (g_samplerCacheForSamplerBuffer.find(program) != g_samplerCacheForSamplerBuffer.end()) {
-            g_samplerCacheForSamplerBuffer.erase(program);
+    if (program != 0) {
+        g_programIgnoreErrorLevel[program] = global_settings.ignore_error;
+        if (hardware->emulate_texture_buffer) {
+            program_map_is_sampler_buffer_emulated[program] = false;
+            if (g_samplerCacheForSamplerBuffer.find(program) != g_samplerCacheForSamplerBuffer.end()) {
+                g_samplerCacheForSamplerBuffer.erase(program);
+            }
         }
+        program_map_is_atomic_counter_emulated[program] = false;
+        program_map_should_generate_fs[program] = ShouldGenerateFSState::Unknown;
     }
-    program_map_is_atomic_counter_emulated[program] = false;
-    program_map_should_generate_fs[program] = ShouldGenerateFSState::Unknown;
-
     CHECK_GL_ERROR
     return program;
 }

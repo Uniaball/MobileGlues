@@ -4,20 +4,22 @@
 //   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
 // SPDX-License-Identifier: LGPL-2.1-only
 // End of Source File Header
+
 #ifndef MOBILEGLUES_SHADER_H
 #define MOBILEGLUES_SHADER_H
 
 #include <GL/gl.h>
 #include <string>
+#include <unordered_map>
 
-struct shader_t {
-    GLuint id;
+struct ShaderInfo {
     std::string converted;
-    char* frag_data_changed_converted;
-    int frag_data_changed;
+    std::string frag_data_changed_converted;
+    int frag_data_changed = 0;
+    int ignore_error_level = 0;
 };
 
-extern struct shader_t shaderInfo;
+extern std::unordered_map<GLuint, ShaderInfo> g_shaderInfos;
 
 #ifdef __cplusplus
 extern "C"
@@ -33,4 +35,4 @@ extern "C"
 }
 #endif
 
-#endif // FOLD_CRAFT_LAUNCHER_GL_LOADER_H
+#endif // MOBILEGLUES_SHADER_H
