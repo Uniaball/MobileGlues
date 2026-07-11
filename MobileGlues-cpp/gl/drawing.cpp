@@ -23,7 +23,7 @@ std::string bufSampelerName;
 extern UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
 extern UnorderedMap<GLuint, bool> program_map_is_atomic_counter_emulated;
 
-bool g_current_program_needs_sampler_emulation = false;
+extern bool g_current_program_needs_sampler_emulation;
 
 struct UniformLocationCache {
     UnorderedMap<GLuint, GLint> widthLoc;
