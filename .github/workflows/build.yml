@@ -3,18 +3,18 @@ name: Build DesktopGlues for Android
 on:
   push:
   workflow_dispatch:
-  
+
 env:
-  USE_FULL_LTO: ON
+  LTO_LEVEL: 2          # 0=no LTO, 1=ThinLTO, 2=Full LTO
   USE_EXTRA_OPTIMIZATIONS: ON
-  
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v6
-    
+
     - name: Clone Dependencies
       run: |
         cd MobileGlues-cpp
@@ -24,10 +24,17 @@ jobs:
         git clone --depth 1 https://github.com/MobileGL-Dev/FastSTL.git include/FastSTL
         git clone --depth 1 https://github.com/KhronosGroup/glslang.git 3rdparty/glslang
         git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Cross.git 3rdparty/SPIRV-Cross
-        
+
     - name: Configure CMake
       run: |
         cd MobileGlues-cpp
+        LTO_LEVEL=${{ env.LTO_LEVEL }}
+        LTO_FLAG=""
+        if [ "$LTO_LEVEL" -eq 2 ]; then
+          LTO_FLAG="-flto"
+        elif [ "$LTO_LEVEL" -eq 1 ]; then
+          LTO_FLAG="-flto=thin"
+        fi
         CMAKE_ARGS=(
           -DANDROID_ABI=arm64-v8a
           -DANDROID_PLATFORM=android-29
@@ -35,18 +42,10 @@ jobs:
           -DANDROID_TOOLCHAIN=clang
           -DCMAKE_BUILD_TYPE=Release
           -DUSE_EXTRA_OPTIMIZATIONS=${{ env.USE_EXTRA_OPTIMIZATIONS }}
+          -DLTO_FLAG="$LTO_FLAG"
         )
-        
-        if [ "$USE_FULL_LTO" = "ON" ]; then
-          CMAKE_ARGS+=(
-            -DCMAKE_C_FLAGS="-w -g -std=gnu99 -funwind-tables -fvisibility=hidden -flto"
-            -DCMAKE_CXX_FLAGS="-w -fvisibility=hidden -funwind-tables -g -D_THREAD_SAFE -fPIC -flto"
-            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -flto"
-          )
-        fi
-        
         cmake -B build "${CMAKE_ARGS[@]}"
-        
+
     - name: Build
       run: cmake --build MobileGlues-cpp/build --config Release --target desktopglues --parallel $(nproc)
 
@@ -54,7 +53,7 @@ jobs:
       run: |
         cd MobileGlues-cpp/build/
         $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all libdesktopglues.so
-        
+
     - name: Upload
       uses: actions/upload-artifact@v7
       with:

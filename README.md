@@ -17,7 +17,10 @@ DesktopGlues 延续 MobileGlues 的开源协议，采用 GNU LGPL-2.1 License。
 
 DesktopGlues 在编译时支持两组可选的性能优化开关，通过环境变量控制：
 
-- **`USE_FULL_LTO`**：启用完整的链接时优化（Full LTO，`-flto`），可显著减小体积并提升运行时性能。默认 `ON`。
+- **`LTO_LEVEL`**：链接时优化（LTO）等级，可选值：
+  - `0`：禁用 LTO
+  - `1`：启用 ThinLTO（`-flto=thin`），链接更快，性能接近 Full LTO
+  - `2`：启用 Full LTO（`-flto`），最优性能和最小体积。默认 `2`。
 - **`USE_EXTRA_OPTIMIZATIONS`**：启用额外的编译和链接优化，进一步压缩体积和提高执行效率。默认 `ON`。
 
 当 `USE_EXTRA_OPTIMIZATIONS=ON` 时，将应用以下优化（针对 Android ARM64 平台）：
@@ -50,17 +53,17 @@ DesktopGlues 在编译时支持两组可选的性能优化开关，通过环境�
 
 ```yaml
 env:
-  USE_FULL_LTO: ON          # 启用 Full LTO
-  USE_EXTRA_OPTIMIZATIONS: ON   # 启用额外优化
+  LTO_LEVEL: 2                 # 0=禁用LTO, 1=ThinLTO, 2=Full LTO
+  USE_EXTRA_OPTIMIZATIONS: ON  # 启用额外优化
 ```
 
 本地构建时，可通过 CMake 参数传递：
 
 ```bash
-cmake -B build -DUSE_EXTRA_OPTIMIZATIONS=ON
+cmake -B build -DUSE_EXTRA_OPTIMIZATIONS=ON -DLTO_LEVEL=2
 ```
 
-默认情况下，这些优化选项均为开启状态，以获取最佳性能和最小体积。
+默认情况下，LTO 等级为 2（Full LTO），额外优化为开启状态，以获取最佳性能和最小体积。
 
 # Third-party components
 

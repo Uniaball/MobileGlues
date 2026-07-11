@@ -40,6 +40,10 @@ else()
     set(USE_EXTRA_OPTIMIZATIONS_ENABLED FALSE)
 endif()
 
+if (DEFINED LTO_FLAG)
+    set(LTO_FLAG "${LTO_FLAG}" CACHE STRING "LTO flag (e.g., -flto or -flto=thin)" FORCE)
+endif()
+
 if(MACOS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w -fvisibility=default -funwind-tables -g -D_THREAD_SAFE -fPIC -stdlib=libc++")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w -g -std=gnu99 -funwind-tables -fvisibility=hidden")
@@ -82,6 +86,11 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_COMPILER_ID MATC
         message(STATUS "    -Wl,--hash-style=gnu     : use GNU hash style")
         message(STATUS "    -Wl,-Bsymbolic           : prefer local symbols")
         message(STATUS "    -Wl,--exclude-libs,ALL   : hide all static library symbols")
+        if (LTO_FLAG)
+            message(STATUS "    ${LTO_FLAG}             : LTO")
+        else()
+            message(STATUS "    LTO                     : Disabled")
+        endif()
         message(STATUS "============================================================")
         message(STATUS "")
 
@@ -108,6 +117,16 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_COMPILER_ID MATC
             -Wl,-Bsymbolic
             -Wl,--exclude-libs,ALL
         )
+
+        # LTO flag added if provided
+        if (LTO_FLAG)
+            message(STATUS "LTO: ${LTO_FLAG}")
+            add_compile_options(${LTO_FLAG})
+            add_link_options(${LTO_FLAG})
+        else()
+            message(STATUS "LTO: Disabled")
+        endif()
+
     else()
         message(STATUS "")
         message(STATUS "============================================================")
