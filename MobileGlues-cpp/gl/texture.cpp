@@ -11,6 +11,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <memory>
+#include <array>
+#include <algorithm>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -37,227 +40,146 @@ int nlevel(int size, int level) {
     return size;
 }
 
-GLenum ConvertTextureTargetToGLEnum(TextureTarget target) {
-    switch (target) {
-    case TextureTarget::TEXTURE_1D:
-        return GL_TEXTURE_1D;
-    case TextureTarget::PROXY_TEXTURE_1D:
-        return GL_PROXY_TEXTURE_1D;
-    case TextureTarget::TEXTURE_1D_ARRAY:
-        return GL_TEXTURE_1D_ARRAY;
-    case TextureTarget::PROXY_TEXTURE_1D_ARRAY:
-        return GL_PROXY_TEXTURE_1D_ARRAY;
-    case TextureTarget::TEXTURE_2D:
-        return GL_TEXTURE_2D;
-    case TextureTarget::PROXY_TEXTURE_2D:
-        return GL_PROXY_TEXTURE_2D;
-    case TextureTarget::TEXTURE_2D_ARRAY:
-        return GL_TEXTURE_2D_ARRAY;
-    case TextureTarget::PROXY_TEXTURE_2D_ARRAY:
-        return GL_PROXY_TEXTURE_2D_ARRAY;
-    case TextureTarget::TEXTURE_2D_MULTISAMPLE:
-        return GL_TEXTURE_2D_MULTISAMPLE;
-    case TextureTarget::PROXY_TEXTURE_2D_MULTISAMPLE:
-        return GL_PROXY_TEXTURE_2D_MULTISAMPLE;
-    case TextureTarget::TEXTURE_2D_MULTISAMPLE_ARRAY:
-        return GL_TEXTURE_2D_MULTISAMPLE_ARRAY;
-    case TextureTarget::PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY:
-        return GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY;
-    case TextureTarget::TEXTURE_3D:
-        return GL_TEXTURE_3D;
-    case TextureTarget::PROXY_TEXTURE_3D:
-        return GL_PROXY_TEXTURE_3D;
-    case TextureTarget::TEXTURE_RECTANGLE:
-        return GL_TEXTURE_RECTANGLE;
-    case TextureTarget::PROXY_TEXTURE_RECTANGLE:
-        return GL_PROXY_TEXTURE_RECTANGLE;
-    case TextureTarget::TEXTURE_CUBE_MAP:
-        return GL_TEXTURE_CUBE_MAP;
-    case TextureTarget::PROXY_TEXTURE_CUBE_MAP:
-        return GL_PROXY_TEXTURE_CUBE_MAP;
-    case TextureTarget::TEXTURE_CUBE_MAP_ARRAY:
-        return GL_TEXTURE_CUBE_MAP_ARRAY;
-    case TextureTarget::PROXY_TEXTURE_CUBE_MAP_ARRAY:
-        return GL_PROXY_TEXTURE_CUBE_MAP_ARRAY;
-    case TextureTarget::TEXTURE_BUFFER:
-        return GL_TEXTURE_BUFFER;
-    default:
-        return GL_TEXTURE_2D;
-    }
-}
+static const GLenum g_targetToGLEnumMap[] = {
+    GL_TEXTURE_1D,
+    GL_PROXY_TEXTURE_1D,
+    GL_TEXTURE_1D_ARRAY,
+    GL_PROXY_TEXTURE_1D_ARRAY,
+    GL_TEXTURE_2D,
+    GL_PROXY_TEXTURE_2D,
+    GL_TEXTURE_2D_ARRAY,
+    GL_PROXY_TEXTURE_2D_ARRAY,
+    GL_TEXTURE_2D_MULTISAMPLE,
+    GL_PROXY_TEXTURE_2D_MULTISAMPLE,
+    GL_TEXTURE_2D_MULTISAMPLE_ARRAY,
+    GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY,
+    GL_TEXTURE_3D,
+    GL_PROXY_TEXTURE_3D,
+    GL_TEXTURE_RECTANGLE,
+    GL_PROXY_TEXTURE_RECTANGLE,
+    GL_TEXTURE_CUBE_MAP,
+    GL_PROXY_TEXTURE_CUBE_MAP,
+    GL_TEXTURE_CUBE_MAP_ARRAY,
+    GL_PROXY_TEXTURE_CUBE_MAP_ARRAY,
+    GL_TEXTURE_BUFFER
+};
+static_assert(sizeof(g_targetToGLEnumMap) / sizeof(g_targetToGLEnumMap[0]) == static_cast<size_t>(TextureTarget::TEXTURES_COUNT),
+              "Map size mismatch");
 
 TextureTarget ConvertGLEnumToTextureTarget(GLenum target) {
     switch (target) {
-    case GL_TEXTURE_1D:
-        return TextureTarget::TEXTURE_1D;
-    case GL_PROXY_TEXTURE_1D:
-        return TextureTarget::PROXY_TEXTURE_1D;
-    case GL_TEXTURE_1D_ARRAY:
-        return TextureTarget::TEXTURE_1D_ARRAY;
-    case GL_PROXY_TEXTURE_1D_ARRAY:
-        return TextureTarget::PROXY_TEXTURE_1D_ARRAY;
-    case GL_TEXTURE_2D:
-        return TextureTarget::TEXTURE_2D;
-    case GL_PROXY_TEXTURE_2D:
-        return TextureTarget::PROXY_TEXTURE_2D;
-    case GL_TEXTURE_2D_ARRAY:
-        return TextureTarget::TEXTURE_2D_ARRAY;
-    case GL_PROXY_TEXTURE_2D_ARRAY:
-        return TextureTarget::PROXY_TEXTURE_2D_ARRAY;
-    case GL_TEXTURE_2D_MULTISAMPLE:
-        return TextureTarget::TEXTURE_2D_MULTISAMPLE;
-    case GL_PROXY_TEXTURE_2D_MULTISAMPLE:
-        return TextureTarget::PROXY_TEXTURE_2D_MULTISAMPLE;
-    case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
-        return TextureTarget::TEXTURE_2D_MULTISAMPLE_ARRAY;
-    case GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY:
-        return TextureTarget::PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY;
-    case GL_TEXTURE_3D:
-        return TextureTarget::TEXTURE_3D;
-    case GL_PROXY_TEXTURE_3D:
-        return TextureTarget::PROXY_TEXTURE_3D;
-    case GL_TEXTURE_RECTANGLE:
-        return TextureTarget::TEXTURE_RECTANGLE;
-    case GL_PROXY_TEXTURE_RECTANGLE:
-        return TextureTarget::PROXY_TEXTURE_RECTANGLE;
-    case GL_PROXY_TEXTURE_CUBE_MAP:
-        return TextureTarget::PROXY_TEXTURE_CUBE_MAP;
+    case GL_TEXTURE_1D: return TextureTarget::TEXTURE_1D;
+    case GL_PROXY_TEXTURE_1D: return TextureTarget::PROXY_TEXTURE_1D;
+    case GL_TEXTURE_1D_ARRAY: return TextureTarget::TEXTURE_1D_ARRAY;
+    case GL_PROXY_TEXTURE_1D_ARRAY: return TextureTarget::PROXY_TEXTURE_1D_ARRAY;
+    case GL_TEXTURE_2D: return TextureTarget::TEXTURE_2D;
+    case GL_PROXY_TEXTURE_2D: return TextureTarget::PROXY_TEXTURE_2D;
+    case GL_TEXTURE_2D_ARRAY: return TextureTarget::TEXTURE_2D_ARRAY;
+    case GL_PROXY_TEXTURE_2D_ARRAY: return TextureTarget::PROXY_TEXTURE_2D_ARRAY;
+    case GL_TEXTURE_2D_MULTISAMPLE: return TextureTarget::TEXTURE_2D_MULTISAMPLE;
+    case GL_PROXY_TEXTURE_2D_MULTISAMPLE: return TextureTarget::PROXY_TEXTURE_2D_MULTISAMPLE;
+    case GL_TEXTURE_2D_MULTISAMPLE_ARRAY: return TextureTarget::TEXTURE_2D_MULTISAMPLE_ARRAY;
+    case GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY: return TextureTarget::PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY;
+    case GL_TEXTURE_3D: return TextureTarget::TEXTURE_3D;
+    case GL_PROXY_TEXTURE_3D: return TextureTarget::PROXY_TEXTURE_3D;
+    case GL_TEXTURE_RECTANGLE: return TextureTarget::TEXTURE_RECTANGLE;
+    case GL_PROXY_TEXTURE_RECTANGLE: return TextureTarget::PROXY_TEXTURE_RECTANGLE;
+    case GL_TEXTURE_CUBE_MAP:
     case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
     case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
     case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
     case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
     case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
     case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
-    case GL_TEXTURE_CUBE_MAP:
         return TextureTarget::TEXTURE_CUBE_MAP;
-    case GL_TEXTURE_CUBE_MAP_ARRAY:
-        return TextureTarget::TEXTURE_CUBE_MAP_ARRAY;
-    case GL_PROXY_TEXTURE_CUBE_MAP_ARRAY:
-        return TextureTarget::PROXY_TEXTURE_CUBE_MAP_ARRAY;
-    case GL_TEXTURE_BUFFER:
-        return TextureTarget::TEXTURE_BUFFER;
-    default:
-        return TextureTarget::UNKNWON;
+    case GL_PROXY_TEXTURE_CUBE_MAP: return TextureTarget::PROXY_TEXTURE_CUBE_MAP;
+    case GL_TEXTURE_CUBE_MAP_ARRAY: return TextureTarget::TEXTURE_CUBE_MAP_ARRAY;
+    case GL_PROXY_TEXTURE_CUBE_MAP_ARRAY: return TextureTarget::PROXY_TEXTURE_CUBE_MAP_ARRAY;
+    case GL_TEXTURE_BUFFER: return TextureTarget::TEXTURE_BUFFER;
+    default: return TextureTarget::UNKNWON;
     }
+}
+
+GLenum ConvertTextureTargetToGLEnum(TextureTarget target) {
+    int idx = static_cast<int>(target);
+    if (idx >= 0 && idx < static_cast<int>(sizeof(g_targetToGLEnumMap) / sizeof(g_targetToGLEnumMap[0]))) {
+        return g_targetToGLEnumMap[idx];
+    }
+    return GL_TEXTURE_2D;
 }
 
 const int MAX_TEXTURE_IMAGE_UNITS = 32;
 
-class TextureBindingSlot {
-public:
-    using TargetEnum = TextureTarget;
-
-    TextureBindingSlot() : m_target((TargetEnum)0), m_boundObject(nullptr) {}
-
-    explicit TextureBindingSlot(TargetEnum target) : m_target(target), m_boundObject(nullptr) {}
-
-    void Bind(TextureObject* object) { m_boundObject = object; }
-
-    TextureObject* GetBoundObject() const {
-        if (!m_boundObject) {
-            LOG_E("TextureBindingSlot: m_boundObject is nullptr!");
-            return nullptr;
-        }
-        return m_boundObject;
-    }
-
-    TargetEnum GetTarget() const { return m_target; }
-
-private:
-    TargetEnum m_target;
-    TextureObject* m_boundObject;
-};
-
-class TextureUnit {
-public:
-    TextureBindingSlot& GetBindingSlot(TextureBindingSlot::TargetEnum target) { return m_slots[(int)target]; }
-
-private:
-    std::array<TextureBindingSlot, (int)TextureTarget::TEXTURES_COUNT> m_slots;
-};
-
-static std::vector<TextureObject*> BufferObjectsVec;
-static std::array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> TextureUnits;
-static int CurrentTextureUnitIndex = 0;
+static std::vector<std::unique_ptr<TextureObject>> s_textureObjects;
+static std::array<std::array<TextureObject*, static_cast<int>(TextureTarget::TEXTURES_COUNT)>, MAX_TEXTURE_IMAGE_UNITS> s_unitBindings;
+static int s_currentTextureUnitIndex = 0;
 
 void InitTextureMap(size_t expectedSize) {
-    BufferObjectsVec.reserve(expectedSize);
+    if (s_textureObjects.empty()) {
+        s_textureObjects.reserve(expectedSize > 0 ? expectedSize : 1024);
+        s_textureObjects.resize(1);
+        for (auto& unit : s_unitBindings) {
+            unit.fill(nullptr);
+        }
+    }
 }
 
 TextureObject* GetOrCreateTextureObject(GLuint index) {
-    if (index >= BufferObjectsVec.size()) {
-        BufferObjectsVec.resize(index + 100, nullptr);
+    if (index >= s_textureObjects.size()) {
+        s_textureObjects.resize(index + 100);
     }
-
-    auto& obj = BufferObjectsVec[index];
-    if (!obj) {
-        obj = new TextureObject();
-        obj->texture = index;
+    if (!s_textureObjects[index]) {
+        s_textureObjects[index] = std::make_unique<TextureObject>();
+        s_textureObjects[index]->texture = index;
+        s_textureObjects[index]->target = TextureTarget::UNKNWON;
+        s_textureObjects[index]->swizzle_param[0] = GL_RED;
+        s_textureObjects[index]->swizzle_param[1] = GL_GREEN;
+        s_textureObjects[index]->swizzle_param[2] = GL_BLUE;
+        s_textureObjects[index]->swizzle_param[3] = GL_ALPHA;
     }
-    return obj;
-}
-
-void ActivateTextureUnit(int unit) {
-    if (unit < 0 || unit >= MAX_TEXTURE_IMAGE_UNITS) {
-        LOG_E("Invalid texture unit: %d", unit);
-        return;
-    }
-    CurrentTextureUnitIndex = unit;
-}
-
-int GetCurrentTextureUnitIndex() {
-    return CurrentTextureUnitIndex;
-}
-
-TextureUnit& GetTextureUnit(int unit) {
-    if (unit < 0 || unit >= MAX_TEXTURE_IMAGE_UNITS) {
-        LOG_E("Invalid texture unit: %d", unit);
-        return TextureUnits[0];
-    }
-    return TextureUnits[unit];
+    return s_textureObjects[index].get();
 }
 
 void MarkTextureObjectForDeletion(unsigned texture) {
-    if (texture >= BufferObjectsVec.size() || !BufferObjectsVec[texture]) {
-        LOG_D("Texture %u not found in BufferObjectsVec!", texture);
-        return;
-    }
-
-    auto textureObject = BufferObjectsVec[texture];
-
-    // Unbind from all slots in all units
-    for (auto& unit : TextureUnits) {
-        for (int i = 0; i < (int)TextureTarget::TEXTURES_COUNT; ++i) {
-            auto& bindingSlot = unit.GetBindingSlot((TextureTarget)i);
-            if (bindingSlot.GetBoundObject() == textureObject) {
-                bindingSlot.Bind(nullptr);
+    if (texture < s_textureObjects.size() && s_textureObjects[texture]) {
+        TextureObject* obj = s_textureObjects[texture].get();
+        for (auto& unit : s_unitBindings) {
+            for (auto& ptr : unit) {
+                if (ptr == obj) {
+                    ptr = nullptr;
+                }
             }
         }
+        s_textureObjects[texture].reset();
     }
+}
 
-    BufferObjectsVec[texture] = nullptr;
-    delete textureObject;
+TextureObject* mgGetTexObjectByID(unsigned texture) {
+    if (texture < s_textureObjects.size()) {
+        return s_textureObjects[texture].get();
+    }
+    return nullptr;
 }
 
 TextureObject* mgGetTexObjectByTarget(GLenum target) {
-    auto* obj = GetTextureUnit(GetCurrentTextureUnitIndex())
-        .GetBindingSlot(ConvertGLEnumToTextureTarget(target))
-        .GetBoundObject();
+    TextureTarget t = ConvertGLEnumToTextureTarget(target);
+    if (t == TextureTarget::UNKNWON) return nullptr;
+    int idx = static_cast<int>(t);
+    return s_unitBindings[s_currentTextureUnitIndex][idx];
+}
+
+static inline TextureObject* GetBoundTextureObject(GLenum target) {
+    TextureObject* obj = mgGetTexObjectByTarget(target);
     if (!obj) {
-        LOG_E("mgGetTexObjectByTarget: TextureObject for target %d is nullptr!", target);
+        return nullptr;
     }
     return obj;
 }
 
-TextureObject* mgGetTexObjectByID(unsigned texture) {
-    if (texture >= BufferObjectsVec.size() || !BufferObjectsVec[texture]) {
-        LOG_E("Texture %u not found in BufferObjectsVec!", texture);
-        return nullptr;
-    }
-    return BufferObjectsVec[texture];
-}
+#define GET_TEXTURE_OBJECT(target) \
+    TextureObject* tex = mgGetTexObjectByTarget(target); \
+    if (!tex) return
 
-// Inline mapping for various internal formats to format and type
 void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
     if (format && *format == GL_BGRA) *format = GL_RGBA;
 
@@ -354,7 +276,6 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
         if (type) *type = GL_HALF_FLOAT;
         if (format) *format = GL_RG;
         break;
-        // Inline R and RG channel mappings
     case GL_R8:
         if (format) *format = GL_RED;
         if (type) *type = GL_UNSIGNED_BYTE;
@@ -388,8 +309,8 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
                 break;
             default:
                 LOG_E("Unsupported type for GL_RED: %s", glEnumToString(*type));
-                if (type) *type = GL_UNSIGNED_BYTE; // Fallback to unsigned byte
-                *internal_format = GL_R8;           // Fallback to R8
+                if (type) *type = GL_UNSIGNED_BYTE;
+                *internal_format = GL_R8;
                 if (format) *format = GL_RED;
                 break;
             }
@@ -467,7 +388,6 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
         if (format) *format = GL_RGBA;
         if (type) *type = GL_BYTE;
     default:
-        // fallback handling for GL_RGB8, GL_RGBA16_SNORM etc.
         if (*internal_format == GL_RGB8) {
             if (type && *type != GL_UNSIGNED_BYTE) *type = GL_UNSIGNED_BYTE;
             if (format) *format = GL_RGB;
@@ -477,6 +397,7 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
         break;
     }
 }
+
 
 void glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
     LOG()
@@ -491,17 +412,6 @@ void glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
     GLES.glTexParameterf(target, pname, param);
     CHECK_GL_ERROR
 }
-
-#define GET_TEXTURE_OBJECT(target)                                                                                     \
-    unsigned __currentUnitIndex = GetCurrentTextureUnitIndex();                                                        \
-    auto& __currentUnit = GetTextureUnit(__currentUnitIndex);                                                          \
-    auto targetR = ConvertGLEnumToTextureTarget(target);                                                               \
-    if (targetR == TextureTarget::UNKNWON) {                                                                           \
-        LOG_E("%s: Unknown texture target: %s", __func__, glEnumToString(target))                                      \
-        return;                                                                                                        \
-    }                                                                                                                  \
-    auto& __bindingSlot = __currentUnit.GetBindingSlot(targetR);                                                       \
-    auto tex = __bindingSlot.GetBoundObject()
 
 void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format,
                   GLenum type, const GLvoid* pixels) {
@@ -541,7 +451,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
     LOG()
     GLenum transfer_format = format;
 
-    LOG_D("mg_glTexImage2D,target: %s,level: %d,internalFormat: %s->%s,width: "
+    LOG_D("glTexImage2D,target: %s,level: %d,internalFormat: %s->%s,width: "
           "%d,height: %d,border: %d,format: %s,type: %s, pixels: 0x%x",
           glEnumToString(target), level, glEnumToString(internalFormat), glEnumToString(internalFormat), width, height,
           border, glEnumToString(format), glEnumToString(type), pixels)
@@ -573,10 +483,9 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
     tex->swizzle_param[3] = GL_ALPHA;
 
     if (transfer_format == GL_BGRA && tex->format != transfer_format && internalFormat == GL_RGBA8 && width <= 128 &&
-        height <= 128) { // xaero has 64x64 tiles...hack here
+        height <= 128) {
         LOG_D("Detected GL_BGRA format @ tex = %d, do swizzle", tex->texture)
-        if (tex->swizzle_param[0] == 0) { // assert this as never called glTexParameteri(...,
-                                          // GL_TEXTURE_SWIZZLE_R, ...)
+        if (tex->swizzle_param[0] == 0) {
             tex->swizzle_param[0] = GL_RED;
             tex->swizzle_param[1] = GL_GREEN;
             tex->swizzle_param[2] = GL_BLUE;
@@ -621,7 +530,6 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
         GLES.glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max1);
         set_gl_state_proxy_width(((width << level) > max1) ? 0 : width);
         set_gl_state_proxy_height(((height << level) > max1) ? 0 : height);
-        // set_gl_state_proxy_depth(((depth << level) > max1) ? 0 : depth);
         set_gl_state_proxy_intformat(internalFormat);
         return;
     }
@@ -697,7 +605,6 @@ void glTexStorage3D(GLenum target, GLsizei levels, GLenum internalFormat, GLsize
     internal_convert(&internalFormat, nullptr, nullptr);
 
     GLES.glTexStorage3D(target, levels, internalFormat, width, height, depth);
-
 
     GET_TEXTURE_OBJECT(target);
     tex->target = ConvertGLEnumToTextureTarget(target);
@@ -963,13 +870,11 @@ void glTexParameteriv(GLenum target, GLenum pname, const GLint* params) {
     if (pname == GL_TEXTURE_SWIZZLE_RGBA) {
         LOG_D("find GL_TEXTURE_SWIZZLE_RGBA, now use glTexParameteri")
         if (params) {
-            // deferred those call to draw call?
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, params[0]);
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_G, params[1]);
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, params[2]);
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_A, params[3]);
 
-            // save states for now
             GET_TEXTURE_OBJECT(target);
             tex->swizzle_param[0] = params[0];
             tex->swizzle_param[1] = params[1];
@@ -995,13 +900,13 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
           pixels)
 
     if (format == GL_BGRA) {
-        if (type == GL_UNSIGNED_INT_8_8_8_8) { // Stored as ARGB -> RGBA
+        if (type == GL_UNSIGNED_INT_8_8_8_8) {
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_A, GL_RED);
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, GL_GREEN);
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_G, GL_BLUE);
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, GL_ALPHA);
 
-        } else if (type == GL_UNSIGNED_INT_8_8_8_8_REV) { // Stored as BGRA -> RGBA
+        } else if (type == GL_UNSIGNED_INT_8_8_8_8_REV) {
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, GL_RED);
             GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
         }
@@ -1029,21 +934,18 @@ void glBindTexture(GLenum target, GLuint texture) {
     }
     CHECK_GL_ERROR_NO_INIT
 
-    int currentUnitIndex = GetCurrentTextureUnitIndex();
-    auto& currentUnit = GetTextureUnit(currentUnitIndex);
-    auto targetR = ConvertGLEnumToTextureTarget(target);
-    if (targetR == TextureTarget::UNKNWON) {
+    TextureTarget t = ConvertGLEnumToTextureTarget(target);
+    if (t == TextureTarget::UNKNWON) {
         LOG_E("glBindTexture: Unknown texture target: %s", glEnumToString(target));
         return;
     }
-    auto& bindingSlot = currentUnit.GetBindingSlot(targetR);
-    auto textureObject = GetOrCreateTextureObject(texture);
-    if (!textureObject) {
-        LOG_W("glBindTexture: Failed to get or create texture object for ID %d, it may be not tracked", texture);
-        return;
+    TextureObject* obj = GetOrCreateTextureObject(texture);
+    if (obj) {
+        obj->target = t;
+        int unit = s_currentTextureUnitIndex;
+        int idx = static_cast<int>(t);
+        s_unitBindings[unit][idx] = obj;
     }
-    bindingSlot.Bind(textureObject);
-    textureObject->target = targetR;
 }
 
 void glDeleteTextures(GLsizei n, const GLuint* textures) {
@@ -1067,7 +969,7 @@ void glActiveTexture(GLenum texture) {
 
     set_gl_state_current_tex_unit(texture - GL_TEXTURE0);
     GLES.glActiveTexture(texture);
-    ActivateTextureUnit(texture - GL_TEXTURE0);
+    s_currentTextureUnitIndex = texture - GL_TEXTURE0;
     CHECK_GL_ERROR
 }
 

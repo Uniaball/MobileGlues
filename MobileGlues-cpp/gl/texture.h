@@ -9,13 +9,13 @@
 #define MOBILEGLUES_TEXTURE_H
 
 #include <memory>
+#include <array>
+#include <GL/gl.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-
-#include <GL/gl.h>
 
     GLAPI GLAPIENTRY void glTexParameterf(GLenum target, GLenum pname, GLfloat param);
     GLAPI GLAPIENTRY void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border,
@@ -43,7 +43,6 @@ extern "C"
     GLAPI GLAPIENTRY void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                                           GLsizei height, GLenum format, GLenum type, const void* pixels);
     GLAPI GLAPIENTRY void glTexParameteriv(GLenum target, GLenum pname, const GLint* params);
-    GLAPI GLAPIENTRY void glGenerateTextureMipmap(GLuint texture);
     GLAPI GLAPIENTRY void glBindTexture(GLenum target, GLuint texture);
     GLAPI GLAPIENTRY void glDeleteTextures(GLsizei n, const GLuint* textures);
     GLAPI GLAPIENTRY void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void* pixels);
@@ -76,12 +75,6 @@ enum class TextureTarget : unsigned int {
     PROXY_TEXTURE_RECTANGLE,
     TEXTURE_CUBE_MAP,
     PROXY_TEXTURE_CUBE_MAP,
-    // TEXTURE_CUBE_MAP_POSITIVE_X,
-    // TEXTURE_CUBE_MAP_NEGATIVE_X,
-    // TEXTURE_CUBE_MAP_POSITIVE_Y,
-    // TEXTURE_CUBE_MAP_NEGATIVE_Y,
-    // TEXTURE_CUBE_MAP_POSITIVE_Z,
-    // TEXTURE_CUBE_MAP_NEGATIVE_Z,
     TEXTURE_CUBE_MAP_ARRAY,
     PROXY_TEXTURE_CUBE_MAP_ARRAY,
     TEXTURE_BUFFER,
@@ -92,7 +85,7 @@ enum class TextureTarget : unsigned int {
 GLenum ConvertTextureTargetToGLEnum(TextureTarget target);
 TextureTarget ConvertGLEnumToTextureTarget(GLenum target);
 
-class TextureObject { // TODO: Make this a more standard class
+class TextureObject {
 public:
     TextureTarget target;
     GLuint texture;
@@ -104,8 +97,8 @@ public:
     GLsizei depth;
 };
 
-TextureObject* mgGetTexObjectByTarget(GLenum target);
 TextureObject* mgGetTexObjectByID(unsigned texture);
+TextureObject* mgGetTexObjectByTarget(GLenum target);
 void InitTextureMap(size_t expectedSize);
 
 #endif
