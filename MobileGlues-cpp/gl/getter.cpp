@@ -22,7 +22,6 @@
 
 Version GLVersion;
 
-// 小工具函数
 inline int count_spaces(const std::string& str) {
     return std::count(str.begin(), str.end(), ' ');
 }
@@ -68,20 +67,22 @@ void glGetIntegerv(GLenum pname, GLint *params) {
             break;
         }
         case GL_MAJOR_VERSION:
-            *params = GLVersion.Major;
+            (*params) = GLVersion.Major;
             break;
         case GL_MINOR_VERSION:
-            *params = GLVersion.Minor;
+            (*params) = GLVersion.Minor;
             break;
         case GL_MAX_TEXTURE_IMAGE_UNITS: {
             int es_params = 16;
             GLES.glGetIntegerv(pname, &es_params);
-            *params = es_params * 2;
+            (*params) = es_params * 2;
+            CHECK_GL_ERROR
             break;
         }
-        case GL_CONTEXT_FLAGS:
-            *params = GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT | GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT | GL_CONTEXT_FLAG_NO_ERROR_BIT;
+        case GL_CONTEXT_FLAGS: {
+            (*params) = 0;
             break;
+        }
         case GL_ARRAY_BUFFER_BINDING:
         case GL_ATOMIC_COUNTER_BUFFER_BINDING:
         case GL_COPY_READ_BUFFER_BINDING:
@@ -94,19 +95,17 @@ void glGetIntegerv(GLenum pname, GLint *params) {
         case GL_SHADER_STORAGE_BUFFER_BINDING:
         case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
         case GL_UNIFORM_BUFFER_BINDING:
-            *params = static_cast<GLint>(find_bound_buffer(pname));
+            (*params) = (int)find_bound_buffer(pname);
+            LOG_D("  -> %d", *params)
             break;
         case GL_VERTEX_ARRAY_BINDING:
-            *params = static_cast<GLint>(find_bound_array());
+            (*params) = (int)find_bound_array();
             break;
         default:
             GLES.glGetIntegerv(pname, params);
+            LOG_D("  -> %d", *params)
+            CHECK_GL_ERROR
     }
-    
-#if DEBUG
-    LOG_D("  -> %d", *params)
-    CHECK_GL_ERROR
-#endif
 }
 
 GLenum glGetError() {
@@ -121,7 +120,6 @@ GLenum glGetError() {
     return GL_NO_ERROR;
 }
 
-// 扩展列表缓存
 static std::string es_ext;
 
 std::string GetExtensionsList() {
@@ -149,7 +147,6 @@ void InitGLESBaseExtensions() {
 
     extensions.insert(extensions.end(), std::begin(base_exts), std::end(base_exts));
 
-    // 保留原始随机化逻辑
     if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) {
         for (int i = extensions.size() - 1; i > 0; --i) {
             int j = rand() % (i + 1);
@@ -185,7 +182,6 @@ inline std::string getBeforeThirdSpace(const std::string& str) {
     return str.substr(0, endPos);
 }
 
-// GPU名称缓存
 std::string getGpuName() {
     static std::string lastGpuName;
     if (!lastGpuName.empty()) return lastGpuName;
@@ -236,7 +232,6 @@ std::string getGLESName() {
     return getBeforeThirdSpace(reinterpret_cast<const char*>(GLES.glGetString(GL_VERSION)));
 }
 
-// 字符串缓存
 static std::string rendererString;
 static std::string vendorString;
 static std::string versionString;
@@ -412,7 +407,6 @@ const GLubyte * glGetString(GLenum name) {
     }
 }
 
-// 字符串索引缓存
 const GLubyte * glGetStringi(GLenum name, GLuint index) {
 #if DEBUG
     LOG()

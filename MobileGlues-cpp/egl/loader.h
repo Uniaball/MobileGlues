@@ -36,7 +36,10 @@ extern "C"
                                                      const EGLint* attrib_list);
 
     typedef EGLSurface (*eglCreatePlatformWindowSurface_PTR)(EGLDisplay display, EGLConfig config, void* native_window,
-                                                             const EGLint* attrib_list);
+                                                             const EGLAttrib* attrib_list);
+
+    typedef EGLSurface (*eglCreatePlatformPixmapSurface_PTR)(EGLDisplay display, EGLConfig config, void* native_pixmap,
+                                                             const EGLAttrib* attrib_list);
 
     typedef EGLSurface (*eglCreateWindowSurface_PTR)(EGLDisplay dpy, EGLConfig config, EGLNativeWindowType win,
                                                      const EGLint* attrib_list);
@@ -57,7 +60,17 @@ extern "C"
 
     typedef EGLDisplay (*eglGetDisplay_PTR)(EGLNativeDisplayType display_id);
 
-    typedef EGLDisplay (*eglGetPlatformDisplay_PTR)(EGLenum platform, void* native_display, const EGLint* attrib_list);
+    typedef EGLDisplay (*eglGetPlatformDisplay_PTR)(EGLenum platform, void* native_display,
+                                                    const EGLAttrib* attrib_list);
+
+    typedef EGLDisplay (*eglGetPlatformDisplayEXT_PTR)(EGLenum platform, void* native_display,
+                                                       const EGLint* attrib_list);
+
+    typedef EGLSurface (*eglCreatePlatformWindowSurfaceEXT_PTR)(EGLDisplay display, EGLConfig config,
+                                                                void* native_window, const EGLint* attrib_list);
+
+    typedef EGLSurface (*eglCreatePlatformPixmapSurfaceEXT_PTR)(EGLDisplay display, EGLConfig config,
+                                                                void* native_pixmap, const EGLint* attrib_list);
 
     typedef EGLint (*eglGetError_PTR)();
 
@@ -108,6 +121,9 @@ extern "C"
         eglCreatePbufferSurface_PTR eglCreatePbufferSurface;
         eglCreatePixmapSurface_PTR eglCreatePixmapSurface;
         eglCreatePlatformWindowSurface_PTR eglCreatePlatformWindowSurface;
+        eglCreatePlatformPixmapSurface_PTR eglCreatePlatformPixmapSurface;
+        eglCreatePlatformWindowSurfaceEXT_PTR eglCreatePlatformWindowSurfaceEXT;
+        eglCreatePlatformPixmapSurfaceEXT_PTR eglCreatePlatformPixmapSurfaceEXT;
         eglCreateWindowSurface_PTR eglCreateWindowSurface;
         eglDestroyContext_PTR eglDestroyContext;
         eglDestroySurface_PTR eglDestroySurface;
@@ -118,6 +134,7 @@ extern "C"
         eglGetCurrentSurface_PTR eglGetCurrentSurface;
         eglGetDisplay_PTR eglGetDisplay;
         eglGetPlatformDisplay_PTR eglGetPlatformDisplay;
+        eglGetPlatformDisplayEXT_PTR eglGetPlatformDisplayEXT;
         eglGetError_PTR eglGetError;
         eglGetProcAddress_PTR eglGetProcAddress;
         eglInitialize_PTR eglInitialize;
