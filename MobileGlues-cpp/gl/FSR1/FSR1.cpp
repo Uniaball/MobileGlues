@@ -14,34 +14,40 @@
 struct GLStateGuard {
     GLint prevProgram;
     GLint prevVAO;
-    GLint prevArrayBuffer;
     GLint prevActiveTexture;
     GLint prevTexture;
     GLint prevReadFBO;
     GLint prevDrawFBO;
-    GLint prevRenderbuffer;
+    GLboolean prevDepthTest;
+    GLboolean prevStencilTest;
+    GLboolean prevBlend;
+    GLboolean prevColorMask[4];
 
     GLStateGuard() {
         GLES.glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
         GLES.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
-        GLES.glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
         GLES.glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTexture);
         GLES.glActiveTexture(prevActiveTexture);
         GLES.glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTexture);
         GLES.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
         GLES.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
-        GLES.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+        prevDepthTest = GLES.glIsEnabled(GL_DEPTH_TEST);
+        prevStencilTest = GLES.glIsEnabled(GL_STENCIL_TEST);
+        prevBlend = GLES.glIsEnabled(GL_BLEND);
+        GLES.glGetBooleanv(GL_COLOR_WRITEMASK, prevColorMask);
     }
 
     ~GLStateGuard() {
         GLES.glUseProgram(prevProgram);
         GLES.glBindVertexArray(prevVAO);
-        GLES.glBindBuffer(GL_ARRAY_BUFFER, prevArrayBuffer);
         GLES.glActiveTexture(prevActiveTexture);
         GLES.glBindTexture(GL_TEXTURE_2D, prevTexture);
-        GLES.glBindRenderbuffer(GL_RENDERBUFFER, prevRenderbuffer);
         GLES.glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
         GLES.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
+        if (prevDepthTest) GLES.glEnable(GL_DEPTH_TEST); else GLES.glDisable(GL_DEPTH_TEST);
+        if (prevStencilTest) GLES.glEnable(GL_STENCIL_TEST); else GLES.glDisable(GL_STENCIL_TEST);
+        if (prevBlend) GLES.glEnable(GL_BLEND); else GLES.glDisable(GL_BLEND);
+        GLES.glColorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
     }
 };
 
@@ -71,6 +77,16 @@ namespace FSR1_Context {
     GLint g_uInputTexLoc = -1;
     GLint g_uConst0Loc = -1;
     GLint g_uViewportSizeLoc = -1;
+
+    // Cached uniform state — uploaded to GPU only when dirty.
+    bool g_uniformsDirty = true;
+    glm::vec4 g_lastConst0 = glm::vec4(0.0f);
+    glm::vec2 g_lastViewportSize = glm::vec2(0.0f);
+
+    // Cached viewport state — glViewport skipped when target dimensions match.
+    GLsizei g_lastFsrViewportW = 0;
+    GLsizei g_lastFsrViewportH = 0;
+    bool g_viewportCacheValid = false;
 }
 
 void CalculateTargetResolution(FSR1_Quality_Preset preset, int renderWidth, int renderHeight, int* targetWidth,
@@ -180,11 +196,18 @@ GLuint CompileFSRShader() {
     FSR1_Context::g_uViewportSizeLoc = glGetUniformLocation(program, "uViewportSize");
 
     FSR1_Context::g_fsrProgram = program;
+    // Program (re)linked — uniform values need to be re-uploaded on next ApplyFSR.
+    FSR1_Context::g_uniformsDirty = true;
     return program;
 }
 
 void InitFullscreenQuad() {
     GLStateGuard state;
+    // GLStateGuard no longer tracks GL_ARRAY_BUFFER_BINDING; save/restore locally
+    // because this function binds g_quadVBO to GL_ARRAY_BUFFER.
+    GLint prevArrayBuffer = 0;
+    GLES.glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
+
     const float quadVertices[] = {-1.0f, 1.0f, 0.0f, 1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f, 0.0f,
                                   -1.0f, 1.0f, 0.0f, 1.0f, 1.0f,  -1.0f, 1.0f, 0.0f, 1.0f, 1.0f,  1.0f, 1.0f};
 
@@ -204,6 +227,8 @@ void InitFullscreenQuad() {
 
     GLES.glBindBuffer(GL_ARRAY_BUFFER, 0);
     GLES.glBindVertexArray(0);
+
+    GLES.glBindBuffer(GL_ARRAY_BUFFER, prevArrayBuffer);
 }
 
 bool fsrInitialized = false;
@@ -211,16 +236,19 @@ void InitFSRResources() {
     if (fsrInitialized) return;
     fsrInitialized = true;
     GLStateGuard state;
+    // GLStateGuard no longer tracks GL_RENDERBUFFER_BINDING; save/restore locally
+    // because this function binds g_depthStencilRBO to set its storage.
+    GLint prevRenderbuffer = 0;
+    GLES.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
 
     FSR1_Context::g_fsrProgram = CompileFSRShader();
     InitFullscreenQuad();
 
     GLES.glGenTextures(1, &FSR1_Context::g_renderTexture);
     GLES.glBindTexture(GL_TEXTURE_2D, FSR1_Context::g_renderTexture);
-    GLES.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight, 0, GL_RGBA,
-                      GL_UNSIGNED_BYTE, nullptr);
-    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    GLES.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
+    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
@@ -238,8 +266,7 @@ void InitFSRResources() {
 
     GLES.glGenTextures(1, &FSR1_Context::g_targetTexture);
     GLES.glBindTexture(GL_TEXTURE_2D, FSR1_Context::g_targetTexture);
-    GLES.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight, 0, GL_RGBA,
-                      GL_UNSIGNED_BYTE, nullptr);
+    GLES.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -251,10 +278,20 @@ void InitFSRResources() {
     GLES.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, FSR1_Context::g_targetTexture, 0);
 
     GLES.glBindFramebuffer(GL_FRAMEBUFFER, FSR1_Context::g_renderFBO);
+    GLES.glBindRenderbuffer(GL_RENDERBUFFER, prevRenderbuffer);
+
+    // First-time init — force uniform upload and viewport set on next ApplyFSR.
+    FSR1_Context::g_uniformsDirty = true;
+    FSR1_Context::g_viewportCacheValid = false;
 }
 
 void RecreateFSRFBO() {
     GLStateGuard state;
+    // GLStateGuard no longer tracks GL_RENDERBUFFER_BINDING; save/restore locally
+    // because this function binds g_depthStencilRBO to set its storage.
+    GLint prevRenderbuffer = 0;
+    GLES.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+
     GLES.glDeleteFramebuffers(1, &FSR1_Context::g_renderFBO);
     GLES.glDeleteTextures(1, &FSR1_Context::g_renderTexture);
     GLES.glDeleteRenderbuffers(1, &FSR1_Context::g_depthStencilRBO);
@@ -264,10 +301,9 @@ void RecreateFSRFBO() {
 
     GLES.glGenTextures(1, &FSR1_Context::g_renderTexture);
     GLES.glBindTexture(GL_TEXTURE_2D, FSR1_Context::g_renderTexture);
-    GLES.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight, 0,
-                      GL_RGBA, GL_FLOAT, nullptr);
-    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    GLES.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
+    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
@@ -285,8 +321,7 @@ void RecreateFSRFBO() {
 
     GLES.glGenTextures(1, &FSR1_Context::g_targetTexture);
     GLES.glBindTexture(GL_TEXTURE_2D, FSR1_Context::g_targetTexture);
-    GLES.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight, 0, GL_RGBA,
-                      GL_UNSIGNED_BYTE, nullptr);
+    GLES.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -299,15 +334,33 @@ void RecreateFSRFBO() {
 
     GLES.glBindFramebuffer(GL_FRAMEBUFFER, FSR1_Context::g_renderFBO);
     GLES.glViewport(0, 0, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
+    GLES.glBindRenderbuffer(GL_RENDERBUFFER, prevRenderbuffer);
+
+    // Resources rebuilt — uniforms and viewport cache must be re-pushed next frame.
+    FSR1_Context::g_uniformsDirty = true;
+    FSR1_Context::g_viewportCacheValid = false;
 }
 
 void ApplyFSR() {
     GLStateGuard state;
 
+    // FSR pass writes every pixel of the target; disable depth/stencil/blend
+    // explicitly so the GPU does not pay for those stages this pass.
+    GLES.glDisable(GL_DEPTH_TEST);
+    GLES.glDisable(GL_STENCIL_TEST);
+    GLES.glDisable(GL_BLEND);
+    GLES.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
     GLES.glBindFramebuffer(GL_FRAMEBUFFER, FSR1_Context::g_targetFBO);
-    GLES.glViewport(0, 0, FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight);
-    GLES.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    GLES.glClear(GL_COLOR_BUFFER_BIT);
+    // Skip glViewport if the target dimensions match the last value FSR pushed.
+    if (!FSR1_Context::g_viewportCacheValid ||
+        FSR1_Context::g_lastFsrViewportW != FSR1_Context::g_targetWidth ||
+        FSR1_Context::g_lastFsrViewportH != FSR1_Context::g_targetHeight) {
+        GLES.glViewport(0, 0, FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight);
+        FSR1_Context::g_lastFsrViewportW = FSR1_Context::g_targetWidth;
+        FSR1_Context::g_lastFsrViewportH = FSR1_Context::g_targetHeight;
+    }
+    // FSR fragment shader writes every pixel; no need to glClear target FBO.
 
     GLES.glUseProgram(FSR1_Context::g_fsrProgram);
 
@@ -318,14 +371,30 @@ void ApplyFSR() {
                         float(FSR1_Context::g_renderHeight) / FSR1_Context::g_targetHeight,
                         1.0f / FSR1_Context::g_targetWidth, 1.0f / FSR1_Context::g_targetHeight};
 
-    if (FSR1_Context::g_uInputTexLoc >= 0)
-        GLES.glUniform1i(FSR1_Context::g_uInputTexLoc, 0);
-    if (FSR1_Context::g_uConst0Loc >= 0)
-        GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, reinterpret_cast<const GLfloat*>(&const0));
-
     glm::vec2 viewportSize = {(float)FSR1_Context::g_renderWidth, (float)FSR1_Context::g_renderHeight};
-    if (FSR1_Context::g_uViewportSizeLoc >= 0)
-        GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, reinterpret_cast<const GLfloat*>(&viewportSize));
+
+    if (FSR1_Context::g_uniformsDirty) {
+        if (FSR1_Context::g_uInputTexLoc >= 0)
+            GLES.glUniform1i(FSR1_Context::g_uInputTexLoc, 0);
+        if (FSR1_Context::g_uConst0Loc >= 0)
+            GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, reinterpret_cast<const GLfloat*>(&const0));
+        if (FSR1_Context::g_uViewportSizeLoc >= 0)
+            GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, reinterpret_cast<const GLfloat*>(&viewportSize));
+        FSR1_Context::g_lastConst0 = const0;
+        FSR1_Context::g_lastViewportSize = viewportSize;
+        FSR1_Context::g_uniformsDirty = false;
+    } else {
+        if (FSR1_Context::g_uInputTexLoc >= 0)
+            GLES.glUniform1i(FSR1_Context::g_uInputTexLoc, 0);
+        if (FSR1_Context::g_uConst0Loc >= 0 && FSR1_Context::g_lastConst0 != const0) {
+            GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, reinterpret_cast<const GLfloat*>(&const0));
+            FSR1_Context::g_lastConst0 = const0;
+        }
+        if (FSR1_Context::g_uViewportSizeLoc >= 0 && FSR1_Context::g_lastViewportSize != viewportSize) {
+            GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, reinterpret_cast<const GLfloat*>(&viewportSize));
+            FSR1_Context::g_lastViewportSize = viewportSize;
+        }
+    }
 
     GLES.glBindVertexArray(FSR1_Context::g_quadVAO);
     GLES.glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -337,7 +406,20 @@ void ApplyFSR() {
                            FSR1_Context::g_targetWidth, FSR1_Context::g_targetHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
     GLES.glBindFramebuffer(GL_FRAMEBUFFER, FSR1_Context::g_renderFBO);
-    GLES.glViewport(0, 0, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
+    // Tell tile-based GPUs the render FBO's depth/stencil need not be preserved
+    // when we leave this FBO; the app is expected to clear depth next frame.
+    {
+        const GLenum invalidateAttachments[] = {GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT};
+        GLES.glInvalidateFramebuffer(GL_FRAMEBUFFER, 2, invalidateAttachments);
+    }
+    if (!FSR1_Context::g_viewportCacheValid ||
+        FSR1_Context::g_lastFsrViewportW != FSR1_Context::g_renderWidth ||
+        FSR1_Context::g_lastFsrViewportH != FSR1_Context::g_renderHeight) {
+        GLES.glViewport(0, 0, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
+        FSR1_Context::g_lastFsrViewportW = FSR1_Context::g_renderWidth;
+        FSR1_Context::g_lastFsrViewportH = FSR1_Context::g_renderHeight;
+        FSR1_Context::g_viewportCacheValid = true;
+    }
 }
 
 void CheckResolutionChange() {
@@ -366,7 +448,17 @@ void CheckResolutionChange() {
                                   reinterpret_cast<int*>(&FSR1_Context::g_targetHeight));
         RecreateFSRFBO();
     }
-    GLES.glViewport(0, 0, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
+    // ApplyFSR just set this viewport; skip the redundant GLES.glViewport when
+    // the cache is still valid and matches render dimensions. If RecreateFSRFBO
+    // ran above, the cache was invalidated and the call below is required.
+    if (!FSR1_Context::g_viewportCacheValid ||
+        FSR1_Context::g_lastFsrViewportW != FSR1_Context::g_renderWidth ||
+        FSR1_Context::g_lastFsrViewportH != FSR1_Context::g_renderHeight) {
+        GLES.glViewport(0, 0, FSR1_Context::g_renderWidth, FSR1_Context::g_renderHeight);
+        FSR1_Context::g_lastFsrViewportW = FSR1_Context::g_renderWidth;
+        FSR1_Context::g_lastFsrViewportH = FSR1_Context::g_renderHeight;
+        FSR1_Context::g_viewportCacheValid = true;
+    }
 }
 
 void OnResize(int width, int height) {
@@ -387,4 +479,7 @@ void glViewport(GLint x, GLint y, GLsizei w, GLsizei h) {
     }
 
     GLES.glViewport(x, y, w, h);
+    // App-driven glViewport changes the GL viewport state behind FSR's back;
+    // invalidate the FSR viewport cache so the next ApplyFSR re-sets it.
+    FSR1_Context::g_viewportCacheValid = false;
 }

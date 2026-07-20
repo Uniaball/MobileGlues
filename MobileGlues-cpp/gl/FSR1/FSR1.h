@@ -52,6 +52,19 @@ namespace FSR1_Context {
     extern bool g_resolutionChanged;
     extern GLsizei g_pendingWidth;
     extern GLsizei g_pendingHeight;
+
+    // Cached uniform state — uploaded to GPU only when dirty.
+    extern GLint g_uInputTexLoc;
+    extern GLint g_uConst0Loc;
+    extern GLint g_uViewportSizeLoc;
+    extern bool g_uniformsDirty;
+    extern glm::vec4 g_lastConst0;
+    extern glm::vec2 g_lastViewportSize;
+
+    // Cached viewport state — glViewport skipped when target dimensions match.
+    extern GLsizei g_lastFsrViewportW;
+    extern GLsizei g_lastFsrViewportH;
+    extern bool g_viewportCacheValid;
 } // namespace FSR1_Context
 
 extern bool fsrInitialized;
