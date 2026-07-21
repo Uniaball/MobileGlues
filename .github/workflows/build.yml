@@ -14,16 +14,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
-
-    - name: Clone Dependencies
-      run: |
-        cd MobileGlues-cpp
-        git clone --depth 1 https://github.com/g-truc/glm.git 3rdparty/glm
-        git clone --depth 1 https://github.com/stbrumme/xxhash.git 3rdparty/xxhash
-        git clone --depth 1 https://android.googlesource.com/platform/external/perfetto 3rdparty/perfetto
-        git clone --depth 1 https://github.com/MobileGL-Dev/FastSTL.git include/FastSTL
-        git clone --depth 1 https://github.com/KhronosGroup/glslang.git 3rdparty/glslang
-        git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Cross.git 3rdparty/SPIRV-Cross
+      with:
+        submodules: recursive
 
     - name: Configure CMake
       run: |

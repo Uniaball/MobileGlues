@@ -22,12 +22,13 @@
 class Cache {
 public:
     Cache();
-    ~Cache() = default;
+    ~Cache();
 
-    const char* get(const char* glsl);
-    void put(const char* glsl, const char* essl);
+    const char* get(const char* glsl, size_t len);
+    void put(const char* glsl, size_t len, const char* essl);
     bool load();
     void save();
+    void flush();
 
     static Cache& get_instance();
 
@@ -43,8 +44,11 @@ private:
     std::list<CacheEntry> cacheList;
     std::unordered_map<uint64_t, ListIterator> cacheMap;
     size_t cacheSize = 0;
+    bool dirty = false;
+    size_t pendingPuts = 0;
+    static constexpr size_t kFlushPendingThreshold = 16;
 
-    static uint64_t computeXXHash(const char* data);
+    static uint64_t computeXXHash(const char* data, size_t len);
     void maintainCacheSize();
 };
 

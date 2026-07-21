@@ -17,13 +17,17 @@ Cache::Cache() {
     load();
 }
 
-uint64_t Cache::computeXXHash(const char* data) {
-    return XXHash64::hash(data, strlen(data), 0);
+Cache::~Cache() {
+    flush();
 }
 
-const char* Cache::get(const char* glsl) {
+uint64_t Cache::computeXXHash(const char* data, size_t len) {
+    return XXHash64::hash(data, len, 0);
+}
+
+const char* Cache::get(const char* glsl, size_t len) {
     if (global_settings.max_glsl_cache_size <= 0) return nullptr;
-    auto hash = computeXXHash(glsl);
+    auto hash = computeXXHash(glsl, len);
     auto it = cacheMap.find(hash);
     if (it == cacheMap.end()) return nullptr;
 
@@ -31,9 +35,9 @@ const char* Cache::get(const char* glsl) {
     return it->second->essl.c_str();
 }
 
-void Cache::put(const char* glsl, const char* essl) {
+void Cache::put(const char* glsl, size_t len, const char* essl) {
     if (global_settings.max_glsl_cache_size <= 0) return;
-    auto hash = computeXXHash(glsl);
+    auto hash = computeXXHash(glsl, len);
     size_t esslStrSize = strlen(essl) + 1;
 
     if (auto it = cacheMap.find(hash); it != cacheMap.end()) {
@@ -47,7 +51,19 @@ void Cache::put(const char* glsl, const char* essl) {
     cacheSize += (sizeof(CacheEntry) + esslStrSize);
 
     maintainCacheSize();
+
+    dirty = true;
+    ++pendingPuts;
+    if (pendingPuts >= kFlushPendingThreshold) {
+        flush();
+    }
+}
+
+void Cache::flush() {
+    if (!dirty) return;
     save();
+    dirty = false;
+    pendingPuts = 0;
 }
 
 void Cache::maintainCacheSize() {

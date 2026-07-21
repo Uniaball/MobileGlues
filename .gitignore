@@ -4,3 +4,4 @@
 src/main/cpp/.vs
 src/main/cpp/out
 src/main/cpp/CMakeSettings.json
+.trae/

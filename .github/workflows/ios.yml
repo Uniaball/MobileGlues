@@ -6,18 +6,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Build DesktopGlues
         run: |
           cd MobileGlues-cpp/ 
-          git clone --depth 1 https://github.com/g-truc/glm.git 3rdparty/glm
-          git clone --depth 1 https://github.com/stbrumme/xxhash.git 3rdparty/xxhash
-          git clone --depth 1 https://android.googlesource.com/platform/external/perfetto 3rdparty/perfetto
-          git clone --depth 1 https://github.com/MobileGL-Dev/FastSTL.git include/FastSTL
-          git clone --depth 1 https://github.com/KhronosGroup/glslang.git 3rdparty/glslang
-          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Cross.git 3rdparty/SPIRV-Cross
-          
           wget https://github.com/leetal/ios-cmake/raw/master/ios.toolchain.cmake
           cmake -B build \
             -DCMAKE_TOOLCHAIN_FILE=ios.toolchain.cmake \

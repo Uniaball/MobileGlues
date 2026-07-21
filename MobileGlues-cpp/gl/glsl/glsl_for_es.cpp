@@ -330,7 +330,7 @@ std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_vers
     std::string sha256_string(glsl_code);
     sha256_string += "\n//" + std::to_string(MAJOR) + "." + std::to_string(MINOR) + "." + std::to_string(REVISION) +
                      "|" + std::to_string(essl_version);
-    const char* cachedESSL = Cache::get_instance().get(sha256_string.c_str());
+    const char* cachedESSL = Cache::get_instance().get(sha256_string.c_str(), sha256_string.size());
     if (cachedESSL) {
         LOG_D("GLSL Hit Cache:\n%s\n-->\n%s", glsl_code, cachedESSL)
         return_code = checkIfAtomicCounterBufferEmulated(std::string(cachedESSL)) ? 1 : 0;
@@ -341,7 +341,7 @@ std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_vers
     std::string converted = GLSLtoGLSLES_2(glsl_code, glsl_type, essl_version, return_code);
     if (return_code >= 0 && !converted.empty()) {
         converted = process_uniform_declarations(converted);
-        Cache::get_instance().put(sha256_string.c_str(), converted.c_str());
+        Cache::get_instance().put(sha256_string.c_str(), sha256_string.size(), converted.c_str());
     }
 
     return (return_code >= 0) ? converted : std::string(glsl_code);

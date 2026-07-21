@@ -6,6 +6,7 @@
 // End of Source File Header
 
 #include "multidraw.h"
+#include "buffer.h"
 #include "../config/settings.h"
 #include <cstdint>
 #include <limits>
@@ -15,21 +16,14 @@
 
 #define DEBUG 0
 
-namespace {
-    // 缓存临时buffer避免重复分配和释放
-    std::vector<GLuint> temp_buffers;
-    std::vector<void*> temp_indices_ptrs;
-    size_t temp_buffers_size = 0;
-
-    // 一次分配全部需要的buffer
-    void allocate_temp_buffers(GLsizei primcount) {
-        if (temp_buffers_size < static_cast<size_t>(primcount)) {
-            temp_buffers.resize(primcount);
-            temp_indices_ptrs.resize(primcount);
-            temp_buffers_size = primcount;
-        }
-    }
-}
+// Persistent scratch state for mg_glMultiDrawElementsBaseVertex_drawelements.
+// Eliminates per-call malloc/free churn and per-call glGenBuffers/glDeleteBuffers
+// GPU buffer churn. g_scratchMultiDrawElementBuffer follows the same lazy-init
+// pattern as g_indirectbuffer (below): glGenBuffers-ed on first use, never deleted.
+// g_scratchIndexData is the CPU-side scratch; it is resize()d to the max sub-draw
+// size in each call and NEVER shrinks across calls (static thread_local).
+static thread_local GLuint g_scratchMultiDrawElementBuffer = 0;
+static thread_local std::vector<uint8_t> g_scratchIndexData;
 
 typedef void (*glMultiDrawElements_t)(GLenum, const GLsizei*, GLenum, const void* const*, GLsizei);
 
@@ -102,7 +96,10 @@ static GLuint prevIndirectBuffer = 0;
 
 void prepare_indirect_buffer(const GLsizei* counts, GLenum type, const void* const* indices, GLsizei primcount,
                              const GLint* basevertex) {
-    GLES.glGetIntegerv(GL_DRAW_INDIRECT_BUFFER_BINDING, (GLint*)&prevIndirectBuffer);
+    // Cache fast path: avoid a GPU sync round-trip by reading the cached binding
+    // (find_bound_buffer -> MG-wrapped id) and translating to the real GL id
+    // (find_real_buffer) so the GLES.glBindBuffer restore below stays correct.
+    prevIndirectBuffer = find_real_buffer(find_bound_buffer(GL_DRAW_INDIRECT_BUFFER_BINDING));
     if (!g_indirect_cmds_inited) {
         GLES.glGenBuffers(1, &g_indirectbuffer);
         GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, g_indirectbuffer);
@@ -162,11 +159,11 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
     LOG()
     void prepareForDraw();
     prepareForDraw();
-    GLint prevElementBuffer;
-    GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevElementBuffer);
-
-    // 使用缓冲区复用优化
-    allocate_temp_buffers(primcount);
+    // Cache fast path (Task 6): read the cached ELEMENT_ARRAY_BUFFER_BINDING
+    // (find_bound_buffer -> MG-wrapped id) and translate to the real GL id
+    // (find_real_buffer) so the raw GLES.glBindBuffer restore below stays
+    // correct. Avoids a GPU sync round-trip that GLES.glGetIntegerv would force.
+    GLint prevElementBuffer = (GLint)find_real_buffer(find_bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING));
 
     size_t indexSize;
     switch (type) {
@@ -183,8 +180,24 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
         return;
     }
 
-    // 一次分配全部temp buffer
-    GLES.glGenBuffers(primcount, temp_buffers.data());
+    // Size the CPU-side scratch exactly once per call to the max sub-draw size.
+    // The scratch never shrinks across calls (static thread_local), so repeated
+    // calls with the same shape do zero heap allocations.
+    size_t maxScratchSize = 0;
+    for (GLsizei i = 0; i < primcount; ++i) {
+        if (counts[i] <= 0) continue;
+        size_t needed = static_cast<size_t>(counts[i]) * indexSize;
+        if (needed > maxScratchSize) maxScratchSize = needed;
+    }
+    if (maxScratchSize > g_scratchIndexData.size()) {
+        g_scratchIndexData.resize(maxScratchSize);
+    }
+
+    // Lazily initialize the single persistent scratch GPU buffer (matches the
+    // g_indirectbuffer pattern: glGenBuffers on first use, never deleted).
+    if (g_scratchMultiDrawElementBuffer == 0) {
+        GLES.glGenBuffers(1, &g_scratchMultiDrawElementBuffer);
+    }
 
     for (GLsizei i = 0; i < primcount; ++i) {
         if (counts[i] <= 0) continue;
@@ -194,8 +207,10 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
         GLint currentBaseVertex = basevertex[i];
 
         void* srcData = nullptr;
-        temp_indices_ptrs[i] = malloc(currentCount * indexSize);
-        if (!temp_indices_ptrs[i]) continue;
+        // Reuse the persistent CPU scratch for this sub-draw's transformed
+        // indices. Each sub-draw uploads its data to the GPU before the next
+        // iteration overwrites the scratch, so a single buffer is sufficient.
+        void* tempIndices = g_scratchIndexData.data();
 
         if (prevElementBuffer != 0) {
             GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevElementBuffer);
@@ -203,7 +218,6 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
                                             GL_MAP_READ_BIT);
 
             if (!srcData) {
-                free(temp_indices_ptrs[i]);
                 continue;
             }
         } else {
@@ -213,17 +227,17 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
         switch (type) {
         case GL_UNSIGNED_INT:
             for (int j = 0; j < currentCount; ++j) {
-                ((GLuint*)temp_indices_ptrs[i])[j] = ((GLuint*)srcData)[j] + currentBaseVertex;
+                ((GLuint*)tempIndices)[j] = ((GLuint*)srcData)[j] + currentBaseVertex;
             }
             break;
         case GL_UNSIGNED_SHORT:
             for (int j = 0; j < currentCount; ++j) {
-                ((GLushort*)temp_indices_ptrs[i])[j] = ((GLushort*)srcData)[j] + currentBaseVertex;
+                ((GLushort*)tempIndices)[j] = ((GLushort*)srcData)[j] + currentBaseVertex;
             }
             break;
         case GL_UNSIGNED_BYTE:
             for (int j = 0; j < currentCount; ++j) {
-                ((GLubyte*)temp_indices_ptrs[i])[j] = ((GLubyte*)srcData)[j] + currentBaseVertex;
+                ((GLubyte*)tempIndices)[j] = ((GLubyte*)srcData)[j] + currentBaseVertex;
             }
             break;
         }
@@ -232,19 +246,15 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
             GLES.glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
         }
 
-        GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, temp_buffers[i]);
-        GLES.glBufferData(GL_ELEMENT_ARRAY_BUFFER, currentCount * indexSize, temp_indices_ptrs[i], GL_STREAM_DRAW);
+        // Orphan+upload in one call: glBindBuffer to the persistent scratch
+        // buffer, then glBufferData(GL_STREAM_DRAW) which the driver treats as
+        // a fresh allocation. Eliminates per-call glGenBuffers/glDeleteBuffers.
+        GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_scratchMultiDrawElementBuffer);
+        GLES.glBufferData(GL_ELEMENT_ARRAY_BUFFER, currentCount * indexSize, tempIndices, GL_STREAM_DRAW);
         GLES.glDrawElements(mode, currentCount, type, 0);
     }
 
     GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevElementBuffer);
-
-    // 清理分配
-    for (GLsizei i = 0; i < primcount; ++i) {
-        if (temp_indices_ptrs[i])
-            free(temp_indices_ptrs[i]);
-    }
-    GLES.glDeleteBuffers(primcount, temp_buffers.data());
 
     CHECK_GL_ERROR
 }
@@ -586,7 +596,10 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     }
 
     GLint ibo = 0;
-    GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &ibo);
+    // Cache fast path (Task 6): find_bound_buffer -> find_real_buffer avoids a
+    // GPU sync round-trip while preserving the real-GL-id semantics that the
+    // raw GLES.glBindBuffer restore at the end of this function requires.
+    ibo = (GLint)find_real_buffer(find_bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING));
     CHECK_GL_ERROR_NO_INIT
     if (ibo == 0) {
         LOG_D("mg_glMultiDrawElementsBaseVertex_compute: no element array buffer bound, fallback")
@@ -673,7 +686,8 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     }
 
     GLint prev_ssbo_binding = 0;
-    GLES.glGetIntegerv(GL_SHADER_STORAGE_BUFFER_BINDING, &prev_ssbo_binding);
+    // Cache fast path (Task 6): cached SSBO binding -> real GL id.
+    prev_ssbo_binding = (GLint)find_real_buffer(find_bound_buffer(GL_SHADER_STORAGE_BUFFER_BINDING));
     CHECK_GL_ERROR_NO_INIT
 
     // Fill in the data
@@ -721,10 +735,14 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
 
     // Save states
     GLint prev_program = 0;
+    // GL_CURRENT_PROGRAM is not a buffer-binding target: the wrapped
+    // glGetIntegerv in getter.cpp has no cached fast path for it (it falls
+    // through to GLES.glGetIntegerv), so we keep the direct driver query here.
     GLES.glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
     CHECK_GL_ERROR_NO_INIT
     GLint prev_vb = 0;
-    GLES.glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prev_vb);
+    // Cache fast path (Task 6): cached ARRAY_BUFFER_BINDING -> real GL id.
+    prev_vb = (GLint)find_real_buffer(find_bound_buffer(GL_ARRAY_BUFFER_BINDING));
     CHECK_GL_ERROR_NO_INIT
 
     // Dispatch compute

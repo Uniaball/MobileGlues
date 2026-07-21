@@ -35,6 +35,7 @@ static UniformLocationCache g_uniformCache;
 UnorderedMap<GLuint, SamplerInfo> g_samplerCacheForSamplerBuffer;
 
 static thread_local std::vector<uint8_t> g_tempIndexBuffer;
+static thread_local GLuint g_scratchElementBuffer = 0;
 
 void setupBufferTextureUniforms(GLuint program) {
     LOG_D("setupBufferTextureUniforms, program: %d", program);
@@ -240,14 +241,14 @@ void glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const voi
         }
         }
 
-        GLuint tempBuffer;
-        GLES.glGenBuffers(1, &tempBuffer);
-        GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tempBuffer);
+        if (g_scratchElementBuffer == 0) {
+            GLES.glGenBuffers(1, &g_scratchElementBuffer);
+        }
+        GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_scratchElementBuffer);
         GLES.glBufferData(GL_ELEMENT_ARRAY_BUFFER, count * indexSize, tempIndices, GL_STREAM_DRAW);
 
         GLES.glDrawElements(mode, count, type, 0);
 
-        GLES.glDeleteBuffers(1, &tempBuffer);
         GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevElementBuffer);
 
         CHECK_GL_ERROR
