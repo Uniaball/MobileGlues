@@ -1,6 +1,6 @@
 [submodule "MobileGlues-cpp/3rdparty/perfetto"]
 	path = MobileGlues-cpp/3rdparty/perfetto
-	url = https://android.googlesource.com/platform/external/perfetto
+	url = https://github.com/google/perfetto.git
 [submodule "MobileGlues-cpp/3rdparty/xxhash"]
 	path = MobileGlues-cpp/3rdparty/xxhash
 	url = https://github.com/stbrumme/xxhash.git
