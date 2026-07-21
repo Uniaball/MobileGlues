@@ -16,17 +16,8 @@
 
 #define DEBUG 0
 
-// Persistent scratch state for mg_glMultiDrawElementsBaseVertex_drawelements.
-// Eliminates per-call malloc/free churn and per-call glGenBuffers/glDeleteBuffers
-// GPU buffer churn. g_scratchMultiDrawElementBuffer follows the same lazy-init
-// pattern as g_indirectbuffer (below): glGenBuffers-ed on first use, never deleted.
-// g_scratchIndexData is the CPU-side scratch; it is resize()d to the max sub-draw
-// size in each call and NEVER shrinks across calls (static thread_local).
 static thread_local GLuint g_scratchMultiDrawElementBuffer = 0;
 static thread_local std::vector<uint8_t> g_scratchIndexData;
-// Persistent scratch for mg_glMultiDrawElementsBaseVertex_compute: avoids
-// per-call heap allocation of first_index / base_vtx. assign()ed to primcount
-// (zero-filled) and NEVER shrinks across calls (static thread_local).
 static thread_local std::vector<GLuint> g_scratchFirstIndex;
 static thread_local std::vector<GLint> g_scratchBaseVtx;
 
@@ -101,9 +92,6 @@ static GLuint prevIndirectBuffer = 0;
 
 void prepare_indirect_buffer(const GLsizei* counts, GLenum type, const void* const* indices, GLsizei primcount,
                              const GLint* basevertex) {
-    // Cache fast path: avoid a GPU sync round-trip by reading the cached binding
-    // (find_bound_buffer -> MG-wrapped id) and translating to the real GL id
-    // (find_real_buffer) so the GLES.glBindBuffer restore below stays correct.
     prevIndirectBuffer = find_real_buffer(find_bound_buffer(GL_DRAW_INDIRECT_BUFFER_BINDING));
     if (!g_indirect_cmds_inited) {
         GLES.glGenBuffers(1, &g_indirectbuffer);
@@ -164,10 +152,6 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
     LOG()
     void prepareForDraw();
     prepareForDraw();
-    // Cache fast path (Task 6): read the cached ELEMENT_ARRAY_BUFFER_BINDING
-    // (find_bound_buffer -> MG-wrapped id) and translate to the real GL id
-    // (find_real_buffer) so the raw GLES.glBindBuffer restore below stays
-    // correct. Avoids a GPU sync round-trip that GLES.glGetIntegerv would force.
     GLint prevElementBuffer = (GLint)find_real_buffer(find_bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING));
 
     size_t indexSize;
@@ -601,9 +585,6 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     }
 
     GLint ibo = 0;
-    // Cache fast path (Task 6): find_bound_buffer -> find_real_buffer avoids a
-    // GPU sync round-trip while preserving the real-GL-id semantics that the
-    // raw GLES.glBindBuffer restore at the end of this function requires.
     ibo = (GLint)find_real_buffer(find_bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING));
     CHECK_GL_ERROR_NO_INIT
     if (ibo == 0) {
@@ -693,7 +674,6 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     }
 
     GLint prev_ssbo_binding = 0;
-    // Cache fast path (Task 6): cached SSBO binding -> real GL id.
     prev_ssbo_binding = (GLint)find_real_buffer(find_bound_buffer(GL_SHADER_STORAGE_BUFFER_BINDING));
     CHECK_GL_ERROR_NO_INIT
 
@@ -725,9 +705,6 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     // Bind buffers
     GLint prev_ssbo_base[5] = {};
     for (int i = 0; i < 5; ++i) {
-        // Cache fast path: indexed SSBO bindings are tracked in g_buffer_map_ssbo_id
-        // (maintained by glBindBufferBase). Resolve to real GL ID to match the
-        // restoration call GLES.glBindBufferBase below.
         prev_ssbo_base[i] = (GLint)find_real_buffer(find_bound_ssbo_at_index(i));
         CHECK_GL_ERROR_NO_INIT
     }
@@ -745,13 +722,10 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
 
     // Save states
     GLint prev_program = 0;
-    // GL_CURRENT_PROGRAM is not a buffer-binding target: the wrapped
-    // glGetIntegerv in getter.cpp has no cached fast path for it (it falls
-    // through to GLES.glGetIntegerv), so we keep the direct driver query here.
+    // GL_CURRENT_PROGRAM is not a buffer-binding target, so find_bound_buffer has no cache for it.
     GLES.glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
     CHECK_GL_ERROR_NO_INIT
     GLint prev_vb = 0;
-    // Cache fast path (Task 6): cached ARRAY_BUFFER_BINDING -> real GL id.
     prev_vb = (GLint)find_real_buffer(find_bound_buffer(GL_ARRAY_BUFFER_BINDING));
     CHECK_GL_ERROR_NO_INIT
 
