@@ -34,6 +34,10 @@ extern "C"
 
     GLuint find_bound_buffer(GLenum key);
 
+    // Returns the MG-wrapped buffer ID currently bound to the indexed SSBO slot `index`,
+    // or 0 if none. Sourced from g_buffer_map_ssbo_id maintained by glBindBufferBase.
+    GLuint find_bound_ssbo_at_index(GLuint index);
+
     GLuint gen_array();
 
     GLboolean has_array(GLuint key);

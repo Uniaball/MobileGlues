@@ -337,6 +337,13 @@ struct atomic_buffer {
 static std::vector<atomic_buffer> g_buffer_map_atomic_buffer_info;
 static std::vector<GLuint> g_buffer_map_ssbo_id;
 
+GLuint find_bound_ssbo_at_index(GLuint index) {
+    if (g_buffer_map_ssbo_id.empty() || index >= g_buffer_map_ssbo_id.size()) {
+        return 0;
+    }
+    return g_buffer_map_ssbo_id[index];
+}
+
 void bindAllAtomicCounterAsSSBO() {
     const size_t count = g_buffer_map_atomic_buffer_info.size();
     for (size_t i = 0; i < count; ++i) {
@@ -356,6 +363,12 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
 
     if (!has_buffer(buffer) || buffer == 0) {
         GLES.glBindBufferRange(target, index, buffer, offset, size);
+        if (target == GL_SHADER_STORAGE_BUFFER) {
+            if (g_buffer_map_ssbo_id.empty()) {
+                g_buffer_map_ssbo_id.resize(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0);
+            }
+            g_buffer_map_ssbo_id[index] = 0;
+        }
         CHECK_GL_ERROR
         return;
     }
@@ -371,6 +384,11 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
             g_buffer_map_atomic_buffer_info.resize(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, {});
         }
         g_buffer_map_atomic_buffer_info[index] = {buffer, size, offset};
+    } else if (target == GL_SHADER_STORAGE_BUFFER) {
+        if (g_buffer_map_ssbo_id.empty()) {
+            g_buffer_map_ssbo_id.resize(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0);
+        }
+        g_buffer_map_ssbo_id[index] = buffer;
     }
     CHECK_GL_ERROR
 }
@@ -381,6 +399,12 @@ void glBindBufferBase(GLenum target, GLuint index, GLuint buffer) {
 
     if (!has_buffer(buffer) || buffer == 0) {
         GLES.glBindBufferBase(target, index, buffer);
+        if (target == GL_SHADER_STORAGE_BUFFER) {
+            if (g_buffer_map_ssbo_id.empty()) {
+                g_buffer_map_ssbo_id.resize(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0);
+            }
+            g_buffer_map_ssbo_id[index] = 0;
+        }
         CHECK_GL_ERROR
         return;
     }

@@ -24,6 +24,11 @@
 // size in each call and NEVER shrinks across calls (static thread_local).
 static thread_local GLuint g_scratchMultiDrawElementBuffer = 0;
 static thread_local std::vector<uint8_t> g_scratchIndexData;
+// Persistent scratch for mg_glMultiDrawElementsBaseVertex_compute: avoids
+// per-call heap allocation of first_index / base_vtx. assign()ed to primcount
+// (zero-filled) and NEVER shrinks across calls (static thread_local).
+static thread_local std::vector<GLuint> g_scratchFirstIndex;
+static thread_local std::vector<GLint> g_scratchBaseVtx;
 
 typedef void (*glMultiDrawElements_t)(GLenum, const GLsizei*, GLenum, const void* const*, GLsizei);
 
@@ -626,8 +631,10 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         sz *= 2;
     g_prefix_sum.resize(sz);
     
-    std::vector<GLuint> first_index(primcount, 0);
-    std::vector<GLint> base_vtx(primcount, 0);
+    g_scratchFirstIndex.assign(primcount, 0);
+    g_scratchBaseVtx.assign(primcount, 0);
+    auto& first_index = g_scratchFirstIndex;
+    auto& base_vtx = g_scratchBaseVtx;
 
     uint64_t running = 0;
     for (GLsizei i = 0; i < primcount; ++i) {
@@ -718,7 +725,10 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     // Bind buffers
     GLint prev_ssbo_base[5] = {};
     for (int i = 0; i < 5; ++i) {
-        GLES.glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, i, &prev_ssbo_base[i]);
+        // Cache fast path: indexed SSBO bindings are tracked in g_buffer_map_ssbo_id
+        // (maintained by glBindBufferBase). Resolve to real GL ID to match the
+        // restoration call GLES.glBindBufferBase below.
+        prev_ssbo_base[i] = (GLint)find_real_buffer(find_bound_ssbo_at_index(i));
         CHECK_GL_ERROR_NO_INIT
     }
 

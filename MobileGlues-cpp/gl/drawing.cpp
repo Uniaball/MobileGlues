@@ -178,8 +178,7 @@ void glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const voi
     if (hardware->es_version < 320 && !g_gles_caps.GL_EXT_draw_elements_base_vertex &&
         !g_gles_caps.GL_OES_draw_elements_base_vertex) {
         LOG_D("Emulating glDrawElementsBaseVertex")
-        GLint prevElementBuffer;
-        GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevElementBuffer);
+        GLint prevElementBuffer = (GLint)find_real_buffer(find_bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING));
 
         if (basevertex == 0) {
             GLES.glDrawElements(mode, count, type, indices);
