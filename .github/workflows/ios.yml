@@ -10,6 +10,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Update submodules to latest
+        run: git submodule update --remote --recursive
+
       - name: Build DesktopGlues
         run: |
           cd MobileGlues-cpp/ 

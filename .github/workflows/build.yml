@@ -17,6 +17,9 @@ jobs:
       with:
         submodules: recursive
 
+    - name: Update submodules to latest
+      run: git submodule update --remote --recursive
+
     - name: Configure CMake
       run: |
         cd MobileGlues-cpp
