@@ -22,6 +22,7 @@ GLuint bufSampelerLoc;
 std::string bufSampelerName;
 
 extern UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
+extern UnorderedMap<GLuint, bool> program_map_is_atomic_counter_emulated;
 
 extern bool g_current_program_needs_sampler_emulation;
 
@@ -152,10 +153,17 @@ void glUniform1i(GLint location, GLint v0) {
     CHECK_GL_ERROR
 }
 
+void bindAllAtomicCounterAsSSBO();
 void glDispatchCompute(GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z) {
     LOG()
     LOG_D("glDispatchCompute, num_groups_x: %d, num_groups_y: %d, num_groups_z: %d", num_groups_x, num_groups_y,
           num_groups_z)
+    if (program_map_is_atomic_counter_emulated[gl_state->current_program]) {
+        bindAllAtomicCounterAsSSBO();
+        LOG_D("Atomic counters bound as SSBOs for program %d", gl_state->current_program);
+    } else {
+        LOG_D("No atomic counters bound as SSBOs for program %d", gl_state->current_program);
+    }
     GLES.glDispatchCompute(num_groups_x, num_groups_y, num_groups_z);
     CHECK_GL_ERROR
 }
@@ -163,6 +171,10 @@ void glDispatchCompute(GLuint num_groups_x, GLuint num_groups_y, GLuint num_grou
 void glMemoryBarrier(GLbitfield barriers) {
     LOG()
     LOG_D("glMemoryBarrier, barriers: %d", barriers)
+    if (program_map_is_atomic_counter_emulated[gl_state->current_program]) {
+        barriers |= GL_ATOMIC_COUNTER_BARRIER_BIT;
+        barriers |= GL_SHADER_STORAGE_BARRIER_BIT;
+    }
     GLES.glMemoryBarrier(barriers);
     CHECK_GL_ERROR
 }
