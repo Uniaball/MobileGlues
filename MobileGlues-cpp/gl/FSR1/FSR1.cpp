@@ -438,7 +438,6 @@ void CheckResolutionChange(EGLDisplay display, EGLSurface surface) {
     egl_eglQuerySurface(display, surface, EGL_WIDTH, &width);
     egl_eglQuerySurface(display, surface, EGL_HEIGHT, &height);
     OnResize(width, height);
-    }
 
     if (FSR1_Context::g_resolutionChanged) {
         FSR1_Context::g_resolutionChanged = false;
