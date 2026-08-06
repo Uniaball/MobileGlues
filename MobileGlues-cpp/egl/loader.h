@@ -99,6 +99,19 @@ extern "C"
     typedef EGLBoolean (*eglSwapBuffersWithDamageEXT_PTR)(EGLDisplay dpy, EGLSurface surface, EGLint* rects,
                                                           EGLint n_rects);
 
+    // EGL 1.5 sync and image objects. Exported so a loader that asks for them
+    // gets this layer's wrapper rather than resolving straight to the driver --
+    // under ANGLE those are two different implementations and mixing them is a
+    // hard crash.
+    typedef EGLSync (*eglCreateSync_PTR)(EGLDisplay dpy, EGLenum type, const EGLAttrib* attrib_list);
+    typedef EGLBoolean (*eglDestroySync_PTR)(EGLDisplay dpy, EGLSync sync);
+    typedef EGLint (*eglClientWaitSync_PTR)(EGLDisplay dpy, EGLSync sync, EGLint flags, EGLTime timeout);
+    typedef EGLBoolean (*eglGetSyncAttrib_PTR)(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLAttrib* value);
+    typedef EGLImage (*eglCreateImage_PTR)(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                                           const EGLAttrib* attrib_list);
+    typedef EGLBoolean (*eglDestroyImage_PTR)(EGLDisplay dpy, EGLImage image);
+    typedef EGLBoolean (*eglWaitSync_PTR)(EGLDisplay dpy, EGLSync sync, EGLint flags);
+
     typedef EGLBoolean (*eglSwapInterval_PTR)(EGLDisplay dpy, EGLint interval);
 
     typedef EGLBoolean (*eglTerminate_PTR)(EGLDisplay dpy);

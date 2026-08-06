@@ -22,13 +22,40 @@ typedef unsigned long size_t;
 
 #define DEFAULT_GL_VERSION 40
 
-enum class multidraw_mode_t : int {
-    Auto = 0,
-    PreferIndirect,
-    PreferBaseVertex,
-    PreferMultidrawIndirect,
-    DrawElements,
-    Compute,
+// The distinct multi-draw *implementations*. Which of them are actually distinct
+// differs per entry point; md_entry_desc_t::allowed encodes that.
+//
+// GLES core has no multi-draw command at all -- not even 3.2, which added only
+// the singular glDrawElementsBaseVertex. Every batched backend below therefore
+// comes from an extension, and each is named after the one that provides it.
+// The first three issue one driver call per sub-draw; the next three issue one
+// call for the whole batch.
+//
+// These integers are never persisted: config.json carries the NAMES, so adding a
+// backend or an entry point can never repoint a value a user already wrote.
+enum class md_backend_t : int {
+    Auto = 0,        // "auto"            pick the best available for this entry point
+    Unroll,          // "unroll"          N x glDraw{Arrays,Elements}
+    BaseVertex,      // "basevertex"      N x glDrawElementsBaseVertex
+    Indirect,        // "indirect"        N x glDraw{Arrays,Elements}Indirect
+    MultiArrays,     // "multiarrays"     1 x glMultiDraw{Arrays,Elements}EXT
+                     //                     (GL_EXT_multi_draw_arrays / GL_ANGLE_multi_draw)
+    MultiBaseVertex, // "multibasevertex" 1 x glMultiDrawElementsBaseVertexEXT
+                     //                     (GL_EXT/OES_draw_elements_base_vertex)
+    MultiIndirect,   // "multiindirect"   1 x glMultiDraw{Arrays,Elements}IndirectEXT
+                     //                     (GL_EXT_multi_draw_indirect)
+    Compute,         // "compute"         compute-shader index fusion
+    MaxValue
+};
+
+// The entry points that have more than one implementation to choose between.
+// glMultiDraw*IndirectCount are absent on purpose: they have exactly one.
+enum class md_entry_t : int {
+    Arrays = 0,         // glMultiDrawArrays
+    Elements,           // glMultiDrawElements
+    ElementsBaseVertex, // glMultiDrawElementsBaseVertex
+    ArraysIndirect,     // glMultiDrawArraysIndirect
+    ElementsIndirect,   // glMultiDrawElementsIndirect
     MaxValue
 };
 
@@ -165,7 +192,8 @@ struct global_settings_t {
     bool ext_direct_state_access;
     bool buffer_coherent_as_flush;
     size_t max_glsl_cache_size;
-    multidraw_mode_t multidraw_mode;
+    md_backend_t multidraw_backend[static_cast<int>(md_entry_t::MaxValue)];
+    unsigned multidraw_disabled_mask; // bit (1u << md_backend_t) = user disabled it
     AngleDepthClearFixMode angle_depth_clear_fix_mode;
     Version custom_gl_version;
     FSR1_Quality_Preset fsr1_setting;
@@ -178,5 +206,31 @@ void init_settings();
 void init_settings_post();
 std::string dump_settings_string(std::string prefix = "");
 void set_multidraw_setting();
+
+// Resolved backend for one entry point. Always a concrete backend after
+// init_settings_post(); never md_backend_t::Auto.
+inline md_backend_t multidraw_backend_of(md_entry_t e) {
+    return global_settings.multidraw_backend[static_cast<int>(e)];
+}
+const char* md_backend_name(md_backend_t b);
+
+// True when the user disabled this backend with multidrawDisableBackends.
+// The runtime fallback chains in gl/multidraw.cpp consult this too: resolution
+// alone is not enough, because a chain can hand control to a backend the user
+// asked never to be used.
+inline bool md_backend_disabled(md_backend_t b) {
+    return (global_settings.multidraw_disabled_mask & (1u << static_cast<int>(b))) != 0;
+}
+
+// Suffix of the mg_<entry>_<suffix> symbol implementing a backend. One table so
+// the dispatcher in gl/multidraw.cpp and the symbol glx/lookup.cpp hands to the
+// application cannot disagree about which implementation a setting selects.
+const char* md_backend_suffix(md_backend_t b);
+
+// Defined in gl/multidraw.cpp: resolves GL_EXT_multi_draw_arrays lazily, because
+// the GLES loader does not carry those entry points and gles/* is not ours to
+// change. Safe to call once a context is current.
+bool mg_multi_draw_arrays_ext_available();
+bool mg_multi_draw_elements_basevertex_ext_available();
 
 #endif // MOBILEGLUES_PLUGIN_SETTINGS_H

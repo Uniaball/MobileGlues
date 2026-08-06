@@ -19,36 +19,32 @@
 
 #define DEBUG 0
 
+// The application can ask for a multi-draw entry point by name and call the
+// result directly, bypassing the dispatcher in gl/multidraw.cpp. Hand back the
+// symbol implementing whatever backend that entry point resolved to, so both
+// routes agree. The suffix table lives in config/settings.cpp for exactly that
+// reason.
 std::string handle_multidraw_func_name(std::string name) {
-    std::string namestr = name;
-    if (namestr != "glMultiDrawElementsBaseVertex" && namestr != "glMultiDrawElements") {
-        return name;
+    md_entry_t entry;
+    if (name == "glMultiDrawElements") {
+        entry = md_entry_t::Elements;
+    } else if (name == "glMultiDrawElementsBaseVertex") {
+        entry = md_entry_t::ElementsBaseVertex;
     } else {
-        namestr = "mg_" + namestr;
+        // Everything else -- glMultiDrawArrays, the two *Indirect entry points and
+        // every EXT/ARB alias -- is a single exported definition that selects its
+        // own backend internally, so the plain name is already correct.
+        return name;
     }
 
-    switch (global_settings.multidraw_mode) {
-    case multidraw_mode_t::PreferIndirect:
-        namestr += "_indirect";
-        break;
-    case multidraw_mode_t::PreferBaseVertex:
-        namestr += "_basevertex";
-        break;
-    case multidraw_mode_t::PreferMultidrawIndirect:
-        namestr += "_multiindirect";
-        break;
-    case multidraw_mode_t::DrawElements:
-        namestr += "_drawelements";
-        break;
-    case multidraw_mode_t::Compute:
-        namestr += "_compute";
-        break;
-    default:
-        LOG_W("get_multidraw_func() cannot determine multidraw emulation mode!")
-        return {};
+    const char* suffix = md_backend_suffix(multidraw_backend_of(entry));
+    if (!suffix) {
+        // Auto should never survive init_settings_post. Fall back to the
+        // dispatcher rather than to dlsym of a name that does not exist.
+        LOG_W_FORCE("handle_multidraw_func_name: %s has no resolved backend, using the dispatcher", name.c_str())
+        return name;
     }
-
-    return namestr;
+    return "mg_" + name + suffix;
 }
 
 void* glXGetProcAddress(const char* name) {

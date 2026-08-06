@@ -21,6 +21,7 @@
 std::unordered_map<GLuint, ShaderInfo> g_shaderInfos;
 
 UnorderedMap<GLuint, bool> shader_map_is_sampler_buffer_emulated;
+
 UnorderedMap<GLuint, bool> shader_map_is_atomic_counter_emulated;
 
 bool can_run_essl3(unsigned int esversion, const char* glsl) {

@@ -179,6 +179,18 @@ void InitGLESCapabilities() {
                 g_gles_caps.GL_EXT_texture_query_lod = 1;
             } else if (strcmp(extension, "GL_EXT_draw_elements_base_vertex") == 0) {
                 g_gles_caps.GL_EXT_draw_elements_base_vertex = 1;
+            } else if (strcmp(extension, "GL_EXT_multisample_compatibility") == 0) {
+                g_gles_caps.GL_EXT_multisample_compatibility = 1;
+            } else if (strcmp(extension, "GL_EXT_clip_cull_distance") == 0) {
+                g_gles_caps.GL_EXT_clip_cull_distance = 1;
+            } else if (strcmp(extension, "GL_EXT_depth_clamp") == 0) {
+                g_gles_caps.GL_EXT_depth_clamp = 1;
+            } else if (strcmp(extension, "GL_EXT_sRGB_write_control") == 0) {
+                g_gles_caps.GL_EXT_sRGB_write_control = 1;
+            } else if (strcmp(extension, "GL_NV_polygon_mode") == 0) {
+                g_gles_caps.GL_NV_polygon_mode = 1;
+            } else if (strcmp(extension, "GL_OES_sample_shading") == 0) {
+                g_gles_caps.GL_OES_sample_shading = 1;
             }
         } else {
             LOG_D("(nullptr)")
@@ -186,6 +198,11 @@ void InitGLESCapabilities() {
     }
 
     LOG_I("%sDetected GL_EXT_multi_draw_indirect!", g_gles_caps.GL_EXT_multi_draw_indirect ? "" : "Not ")
+    LOG_I("Enable-capability extensions: multisample_compatibility=%d clip_cull_distance=%d depth_clamp=%d "
+          "sRGB_write_control=%d NV_polygon_mode=%d OES_sample_shading=%d",
+          g_gles_caps.GL_EXT_multisample_compatibility, g_gles_caps.GL_EXT_clip_cull_distance,
+          g_gles_caps.GL_EXT_depth_clamp, g_gles_caps.GL_EXT_sRGB_write_control, g_gles_caps.GL_NV_polygon_mode,
+          g_gles_caps.GL_OES_sample_shading)
 
     if (g_gles_caps.GL_EXT_buffer_storage) {
         AppendExtension("GL_ARB_buffer_storage");

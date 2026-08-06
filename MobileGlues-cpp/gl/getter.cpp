@@ -6,13 +6,12 @@
 // End of Source File Header
 
 #include "getter.h"
+#include "enable.h"
+#include "../egl/context.h"
 #include "buffer.h"
 #include <string>
-#include <vector>
-#include <memory>
-#include <cstring>
-#include <algorithm>
 #include <format>
+#include <vector>
 #include <random>
 #include "FSR1/FSR1.h"
 #include "log.h"
@@ -22,106 +21,110 @@
 
 Version GLVersion;
 
-inline int count_spaces(const std::string& str) {
-    return std::count(str.begin(), str.end(), ' ');
-}
-
-inline std::vector<std::string> split(const std::string& str, char delim) {
-    std::vector<std::string> tokens;
-    size_t start = 0, end;
-    while ((end = str.find(delim, start)) != std::string::npos) {
-        if (end != start)
-            tokens.emplace_back(str.substr(start, end - start));
-        start = end + 1;
-    }
-    if (start < str.size())
-        tokens.emplace_back(str.substr(start));
-    return tokens;
-}
-
-void glGetIntegerv(GLenum pname, GLint *params) {
-#if DEBUG
+void glGetIntegerv(GLenum pname, GLint* params) {
     LOG()
     LOG_D("glGetIntegerv, pname: %s", glEnumToString(pname))
-#endif
-    
     switch (pname) {
-        case GL_NUM_EXTENSIONS + GL_BACKEND_GETTER_MG:
-            GLES.glGetIntegerv(pname - GL_BACKEND_GETTER_MG, params);
-            return;
-        case GL_CONTEXT_PROFILE_MASK:
-            *params = GL_CONTEXT_CORE_PROFILE_BIT;
-            break;
-        case GL_NUM_EXTENSIONS: {
-            static GLint num_extensions = -1;
-            if (num_extensions == -1) {
-                const GLubyte* ext_str = glGetString(GL_EXTENSIONS);
-                if (ext_str) {
-                    std::string copy_str((const char*)ext_str);
-                    num_extensions = static_cast<GLint>(split(copy_str, ' ').size());
-                } else {
-                    num_extensions = 0;
+    case GL_NUM_EXTENSIONS + GL_BACKEND_GETTER_MG:
+        GLES.glGetIntegerv(pname - GL_BACKEND_GETTER_MG, params);
+        return;
+    case GL_CONTEXT_PROFILE_MASK:
+        (*params) = GL_CONTEXT_CORE_PROFILE_BIT;
+        break;
+    case GL_NUM_EXTENSIONS:
+        static GLint num_extensions = -1;
+        if (num_extensions == -1) {
+            const GLubyte* ext_str = glGetString(GL_EXTENSIONS);
+            if (ext_str) {
+                std::string copy_str((const char*)ext_str);
+                std::string token;
+                size_t pos = 0;
+                num_extensions = 0;
+                while ((pos = copy_str.find(' ')) != std::string::npos) {
+                    num_extensions++;
+                    copy_str.erase(0, pos + 1);
                 }
+                if (!copy_str.empty()) num_extensions++; // Count the last token
+            } else {
+                num_extensions = 0;
             }
-            *params = num_extensions;
+        }
+        (*params) = num_extensions;
+        break;
+    case GL_MAJOR_VERSION:
+        // What THIS context was granted, which after the version gate was relaxed
+        // is what the application asked for rather than the configured maximum.
+        (*params) = g_current_ctx ? g_current_ctx->granted_major : GLVersion.Major;
+        break;
+    case GL_MINOR_VERSION:
+        (*params) = g_current_ctx ? g_current_ctx->granted_minor : GLVersion.Minor;
+        break;
+    case GL_MAX_TEXTURE_IMAGE_UNITS: {
+        int es_params = 16;
+        GLES.glGetIntegerv(pname, &es_params);
+        CHECK_GL_ERROR(*params) = es_params * 2;
+        // Why is the real GL_MAX_TEXTURE_IMAGE_UNITS bigger than what GLES.glGetIntegerv returns?
+        break;
+    }
+    case GL_CONTEXT_FLAGS: {
+        // Reported from what the context was actually created with. Claiming
+        // flags the application never asked for -- as this did before it was
+        // reduced to 0 -- makes a loader believe it has a debug or robust context
+        // that does not behave like one.
+        (*params) = g_current_ctx ? g_current_ctx->context_flags : 0;
+        break;
+    }
+    case GL_ARRAY_BUFFER_BINDING:
+    case GL_ATOMIC_COUNTER_BUFFER_BINDING:
+    case GL_COPY_READ_BUFFER_BINDING:
+    case GL_COPY_WRITE_BUFFER_BINDING:
+    case GL_DRAW_INDIRECT_BUFFER_BINDING:
+    case GL_DISPATCH_INDIRECT_BUFFER_BINDING:
+    case GL_ELEMENT_ARRAY_BUFFER_BINDING:
+    case GL_PIXEL_PACK_BUFFER_BINDING:
+    case GL_PIXEL_UNPACK_BUFFER_BINDING:
+    case GL_SHADER_STORAGE_BUFFER_BINDING:
+    case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
+    case GL_UNIFORM_BUFFER_BINDING:
+        (*params) = (int)find_bound_buffer(pname);
+        LOG_D("  -> %d", *params)
+        break;
+    case GL_VERTEX_ARRAY_BINDING:
+        (*params) = (int)find_bound_array();
+        break;
+    default: {
+        // The enable table owns every enable capability and the handful of limits
+        // that describe it, so glGetIntegerv can never disagree with glIsEnabled.
+        GLboolean enabled = GL_FALSE;
+        GLint ival = 0;
+        if (mg_enable_query(pname, &enabled)) {
+            (*params) = enabled ? 1 : 0;
             break;
         }
-        case GL_MAJOR_VERSION:
-            (*params) = GLVersion.Major;
-            break;
-        case GL_MINOR_VERSION:
-            (*params) = GLVersion.Minor;
-            break;
-        case GL_MAX_TEXTURE_IMAGE_UNITS: {
-            int es_params = 16;
-            GLES.glGetIntegerv(pname, &es_params);
-            (*params) = es_params * 2;
-            CHECK_GL_ERROR
+        if (mg_enable_query_int(pname, &ival)) {
+            (*params) = ival;
             break;
         }
-        case GL_CONTEXT_FLAGS: {
-            (*params) = 0;
-            break;
-        }
-        case GL_ARRAY_BUFFER_BINDING:
-        case GL_ATOMIC_COUNTER_BUFFER_BINDING:
-        case GL_COPY_READ_BUFFER_BINDING:
-        case GL_COPY_WRITE_BUFFER_BINDING:
-        case GL_DRAW_INDIRECT_BUFFER_BINDING:
-        case GL_DISPATCH_INDIRECT_BUFFER_BINDING:
-        case GL_ELEMENT_ARRAY_BUFFER_BINDING:
-        case GL_PIXEL_PACK_BUFFER_BINDING:
-        case GL_PIXEL_UNPACK_BUFFER_BINDING:
-        case GL_SHADER_STORAGE_BUFFER_BINDING:
-        case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
-        case GL_UNIFORM_BUFFER_BINDING:
-            (*params) = (int)find_bound_buffer(pname);
-            LOG_D("  -> %d", *params)
-            break;
-        case GL_VERTEX_ARRAY_BINDING:
-            (*params) = (int)find_bound_array();
-            break;
-        default:
-            GLES.glGetIntegerv(pname, params);
-            LOG_D("  -> %d", *params)
-            CHECK_GL_ERROR
+        GLES.glGetIntegerv(pname, params);
+        LOG_D("  -> %d", *params)
+        CHECK_GL_ERROR
+    }
     }
 }
 
 GLenum glGetError() {
-#if DEBUG
     LOG()
     GLenum err = GLES.glGetError();
+    // just clear gles error, no reporting
     if (err != GL_NO_ERROR) {
+        // no logging without DEBUG
         LOG_W("glGetError\n -> %d", err)
         LOG_W("Now try to cheat.")
     }
-#endif
     return GL_NO_ERROR;
 }
 
 static std::string es_ext;
-
 std::string GetExtensionsList() {
     return es_ext;
 }
@@ -135,15 +138,27 @@ void InitGLESBaseExtensions() {
         extensions.push_back("GL_MG_settings_string_dump");
     }
 
-    const char* base_exts[] = {
-        "GL_ARB_fragment_program", "GL_ARB_vertex_buffer_object", "GL_ARB_vertex_array_object",
-        "GL_ARB_vertex_buffer", "GL_EXT_vertex_array", "GL_ARB_ES2_compatibility",
-        "GL_ARB_ES3_compatibility", "GL_EXT_packed_depth_stencil", "GL_EXT_depth_texture",
-        "GL_ARB_depth_texture", "GL_ARB_shading_language_100", "GL_ARB_imaging",
-        "GL_ARB_draw_buffers_blend", "OpenGL15", "GL_ARB_shader_storage_buffer_object",
-        "GL_ARB_shader_image_load_store", "GL_ARB_clear_texture", "GL_ARB_get_program_binary",
-        "GL_ARB_separate_shader_objects", "GL_ARB_multi_bind", "GL_KHR_no_error"
-    };
+    const char* base_exts[] = {"GL_ARB_fragment_program",
+                               "GL_ARB_vertex_buffer_object",
+                               "GL_ARB_vertex_array_object",
+                               "GL_ARB_vertex_buffer",
+                               "GL_EXT_vertex_array",
+                               "GL_ARB_ES2_compatibility",
+                               "GL_ARB_ES3_compatibility",
+                               "GL_EXT_packed_depth_stencil",
+                               "GL_EXT_depth_texture",
+                               "GL_ARB_depth_texture",
+                               "GL_ARB_shading_language_100",
+                               "GL_ARB_imaging",
+                               "GL_ARB_draw_buffers_blend",
+                               "OpenGL15",
+                               "GL_ARB_shader_storage_buffer_object",
+                               "GL_ARB_shader_image_load_store",
+                               "GL_ARB_clear_texture",
+                               "GL_ARB_get_program_binary",
+                               "GL_ARB_separate_shader_objects",
+                               "GL_ARB_multi_bind",
+                               "GL_KHR_no_error"};
 
     extensions.insert(extensions.end(), std::begin(base_exts), std::end(base_exts));
 
@@ -166,7 +181,7 @@ void AppendExtension(const char* ext) {
     es_ext += ' ';
 }
 
-inline std::string getBeforeThirdSpace(const std::string& str) {
+std::string getBeforeThirdSpace(const std::string& str) {
     int spaceCount = 0;
     size_t endPos = 0;
     for (size_t i = 0; i < str.length(); ++i) {
@@ -179,320 +194,329 @@ inline std::string getBeforeThirdSpace(const std::string& str) {
         }
         if (spaceCount < 3) endPos = str.length();
     }
+
     return str.substr(0, endPos);
 }
 
 std::string getGpuName() {
-    static std::string lastGpuName;
-    if (!lastGpuName.empty()) return lastGpuName;
-    
-    std::string gpuName = reinterpret_cast<const char*>(GLES.glGetString(GL_RENDERER));
-    if (gpuName.empty()) return "<unknown>";
+    std::string gpuName = std::string((char*)GLES.glGetString(GL_RENDERER));
 
+    if (gpuName.empty()) {
+        return "<unknown>";
+    }
+
+    // MetalANGLE, ANGLE (Metal Renderer: Apple * GPU)
     if (gpuName.find("MetalANGLE, ANGLE") != std::string::npos) {
-        if (gpuName.length() >= 25) {
-            std::string gpu = gpuName.substr(23, gpuName.length() - 24);
-            lastGpuName = gpu + " | MetalANGLE | Metal";
-        } else {
-            lastGpuName = gpuName;
+        if (gpuName.length() < 25) {
+            return gpuName;
         }
-    } else if (gpuName.rfind("ANGLE", 0) == 0 && gpuName.find("Vulkan") != std::string::npos) {
+
+        std::string gpu = gpuName.substr(23, gpuName.length() - 24);
+        std::string formattedGpuName = gpu + " | MetalANGLE | Metal";
+        return formattedGpuName;
+    }
+
+    // Vulkan ANGLE
+    if (gpuName.rfind("ANGLE", 0) == 0 && gpuName.find("Vulkan") != std::string::npos) {
         size_t firstParen = gpuName.find('(');
         size_t secondParen = gpuName.find('(', firstParen + 1);
         size_t lastParen = gpuName.rfind('(');
+
         std::string gpu = gpuName.substr(secondParen + 1, lastParen - secondParen - 2);
+
         size_t vulkanStart = gpuName.find("Vulkan ");
         size_t vulkanEnd = gpuName.find(' ', vulkanStart + 7);
         std::string vulkanVersion = gpuName.substr(vulkanStart + 7, vulkanEnd - (vulkanStart + 7));
-        lastGpuName = gpu + " | ANGLE | Vulkan " + vulkanVersion;
-    } else {
-        lastGpuName = gpuName;
+
+        std::string formattedGpuName = gpu + " | ANGLE | Vulkan " + vulkanVersion;
+
+        return formattedGpuName;
     }
-    
-    return lastGpuName;
+
+    return gpuName;
 }
 
 void set_es_version() {
-    std::string ESVersionStr = getBeforeThirdSpace(reinterpret_cast<const char*>(GLES.glGetString(GL_VERSION)));
-    int major = 0, minor = 0;
+    std::string ESVersionStr = getBeforeThirdSpace(std::string((const char*)GLES.glGetString(GL_VERSION)));
+    int major, minor;
+
     if (sscanf(ESVersionStr.c_str(), "OpenGL ES %d.%d", &major, &minor) == 2) {
         hardware->es_version = major * 100 + minor * 10;
     } else {
         hardware->es_version = 300;
     }
-#if DEBUG
     LOG_I("OpenGL ES Version: %s (%d)", ESVersionStr.c_str(), hardware->es_version)
     if (hardware->es_version < 300) {
         LOG_I("OpenGL ES version is lower than 3.0! This version is not supported!")
     }
-#endif
 }
 
 std::string getGLESName() {
-    return getBeforeThirdSpace(reinterpret_cast<const char*>(GLES.glGetString(GL_VERSION)));
+    return getBeforeThirdSpace(std::string((char*)GLES.glGetString(GL_VERSION)));
 }
 
 static std::string rendererString;
 static std::string vendorString;
 static std::string versionString;
-static std::string shadingLangString;
-
-const GLubyte * glGetString(GLenum name) {
-#if DEBUG
+const GLubyte* glGetString(GLenum name) {
     LOG()
     LOG_D("glGetString, %s", glEnumToString(name))
-#endif
-    
     switch (name) {
-        case GL_VENDOR:
-            if (vendorString.empty()) {
-                if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
-                    vendorString = "Swung0x48, BZLZHH, Tungsten, Uniaball";
-                } else {
-                    const char choices[] = "AINM";
-                    vendorString = choices[rand() % 4];
+    case GL_VENDOR: {
+        if (vendorString.empty()) {
+            if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
+                std::string vendor = "Swung0x48, BZLZHH, Tungsten";
+                vendorString = vendor;
+            } else {
+                const char choices[] = "AINM";
+                vendorString = choices[rand() % 4];
 
-                    RandomStringOptions randStrOpts;
-                    randStrOpts.includeDigits = false;
-                    randStrOpts.minLength = 3;
-                    randStrOpts.maxLength = 8;
-                    randStrOpts.includeLowercase = false;
-                    randStrOpts.includeUppercase = false;
-                    randStrOpts.customChars = "IMenaNtMseAVlD";
-                    vendorString += GenerateRandomString(randStrOpts);
-                }
+                RandomStringOptions randStrOpts;
+                randStrOpts.includeDigits = false;
+                randStrOpts.minLength = 3;
+                randStrOpts.maxLength = 8;
+                randStrOpts.includeLowercase = false;
+                randStrOpts.includeUppercase = false;
+                randStrOpts.customChars = "IMenaNtMseAVlD";
+                vendorString += GenerateRandomString(randStrOpts);
             }
-            return reinterpret_cast<const GLubyte*>(vendorString.c_str());
-            
-        case GL_VERSION:
-            if (versionString.empty()) {
-                versionString = GLVersion.toString();
-                if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
-                    if (GLVersion.toInt(2) == DEFAULT_GL_VERSION) {
-                        versionString += " DesktopGlues ";
-                    } else {
-                        Version defaultVersion = Version(DEFAULT_GL_VERSION);
-                        versionString += " §4§l(" + defaultVersion.toString() + ") DesktopGlues§r ";
-                    }
-                    
-                    versionString += std::to_string(MAJOR) + "." + std::to_string(MINOR) + "." + std::to_string(REVISION);
+        }
+        return (const GLubyte*)vendorString.c_str();
+    }
+    case GL_VERSION: {
+        if (versionString.empty()) {
+            versionString = GLVersion.toString();
+            if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
+                if (GLVersion.toInt(2) == DEFAULT_GL_VERSION) {
+                    versionString += " MobileGlues ";
+                } else {
+                    Version defaultVersion = Version(DEFAULT_GL_VERSION);
+                    versionString += " §4§l(" + defaultVersion.toString() + ") MobileGlues§r ";
+                }
+
+                versionString += std::to_string(MAJOR) + "." + std::to_string(MINOR) + "." + std::to_string(REVISION);
 #if PATCH != 0
-                    versionString += "." + std::to_string(PATCH);
+                versionString += "." + std::to_string(PATCH);
 #endif
 #if defined(VERSION_TYPE)
 #if VERSION_TYPE == VERSION_ALPHA
-                    versionString += "·Alpha";
+                versionString += "·Alpha";
 #elif VERSION_TYPE == VERSION_BETA
-                    versionString += "·Beta";
+                versionString += "·Beta";
 #elif VERSION_TYPE == VERSION_DEVELOPMENT
-                    versionString += "·Dev";
+                versionString += "·Dev";
 #elif VERSION_TYPE == VERSION_RC
-                    versionString += "·RC" + std::to_string(VERSION_RC_NUMBER);
+                versionString += "·RC" + std::to_string(VERSION_RC_NUMBER);
 #endif
 #endif
-                    versionString += VERSION_SUFFIX;
-                } else {
-                    const char choices[] = "AIN";
-                    versionString += " ";
-                    versionString += choices[rand() % 3];
+                versionString += VERSION_SUFFIX;
+            } else {
+                const char choices[] = "AIN";
+                versionString += " ";
+                versionString += choices[rand() % 3];
 
-                    RandomStringOptions randStrOpts;
-                    randStrOpts.includeDigits = false;
-                    randStrOpts.customChars = " ";
-                    versionString += GenerateRandomString(randStrOpts);
+                RandomStringOptions randStrOpts;
+                randStrOpts.includeDigits = false;
+                randStrOpts.customChars = " ";
+                versionString += GenerateRandomString(randStrOpts);
 
+                RandomStringOptions randStrOpts2;
+                randStrOpts2.includeDigits = false;
+                randStrOpts2.includeUppercase = false;
+                randStrOpts2.minLength = 1;
+                randStrOpts2.maxLength = 4;
+
+                versionString += std::to_string(MAJOR) + GenerateRandomString(randStrOpts2) + std::to_string(MINOR) +
+                                 GenerateRandomString(randStrOpts2) + std::to_string(REVISION) +
+                                 GenerateRandomString(randStrOpts2) + std::to_string(PATCH) +
+                                 GenerateRandomString(randStrOpts2);
+            }
+        }
+        return (const GLubyte*)versionString.c_str();
+    }
+    case GL_RENDERER: {
+        if (rendererString == std::string("")) {
+            if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
+                std::string gpuName = getGpuName();
+                std::string glesName = getGLESName();
+                rendererString = std::string(gpuName) + " | " + std::string(glesName);
+            } else {
+                const char choices[] = "AINM";
+                rendererString = choices[rand() % 4];
+
+                RandomStringOptions randStrOpts;
+                randStrOpts.includeDigits = true;
+                randStrOpts.minLength = 6;
+                randStrOpts.maxLength = 12;
+                randStrOpts.includeLowercase = false;
+                randStrOpts.includeUppercase = false;
+                randStrOpts.customChars = "IRMenaNtfsoerAceVlDG";
+                rendererString += GenerateRandomString(randStrOpts);
+
+                int junkInfoTime = rand() % 3 + 1;
+                for (int i = 0; i < junkInfoTime; ++i) {
+                    rendererString += " ";
                     RandomStringOptions randStrOpts2;
-                    randStrOpts2.includeDigits = false;
+                    randStrOpts2.minLength = 3;
+                    randStrOpts2.maxLength = 6;
+                    randStrOpts2.includeLowercase = false;
                     randStrOpts2.includeUppercase = false;
-                    randStrOpts2.minLength = 1;
-                    randStrOpts2.maxLength = 4;
-
-                    versionString += std::to_string(MAJOR) + GenerateRandomString(randStrOpts2) + std::to_string(MINOR) +
-                                     GenerateRandomString(randStrOpts2) + std::to_string(REVISION) +
-                                     GenerateRandomString(randStrOpts2) + std::to_string(PATCH) +
-                                     GenerateRandomString(randStrOpts2);
+                    randStrOpts2.customChars = "IRenaNtfsoerAcieVDcsG";
+                    rendererString += GenerateRandomString(randStrOpts2);
                 }
             }
-            return reinterpret_cast<const GLubyte*>(versionString.c_str());
-            
-        case GL_RENDERER:
-            if (rendererString.empty()) {
-                if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
-                    rendererString = getGpuName() + " | " + getGLESName();
-                } else {
-                    const char choices[] = "AINM";
-                    rendererString = choices[rand() % 4];
+        }
+        return (const GLubyte*)rendererString.c_str();
+    }
+    case GL_SHADING_LANGUAGE_VERSION: {
+        static std::string shadingLangString;
 
-                    RandomStringOptions randStrOpts;
-                    randStrOpts.includeDigits = true;
-                    randStrOpts.minLength = 6;
-                    randStrOpts.maxLength = 12;
-                    randStrOpts.includeLowercase = false;
-                    randStrOpts.includeUppercase = false;
-                    randStrOpts.customChars = "IRMenaNtfsoerAceVlDG";
-                    rendererString += GenerateRandomString(randStrOpts);
+        if (shadingLangString.empty()) {
+            std::string baseVer;
+            if (hardware->es_version < 310) {
+                baseVer = "4.00";
+            } else {
+                baseVer = "4.60";
+            }
 
-                    int junkInfoTime = rand() % 3 + 1;
-                    for (int i = 0; i < junkInfoTime; ++i) {
-                        rendererString += " ";
-                        RandomStringOptions randStrOpts2;
-                        randStrOpts2.minLength = 3;
-                        randStrOpts2.maxLength = 6;
-                        randStrOpts2.includeLowercase = false;
-                        randStrOpts2.includeUppercase = false;
-                        randStrOpts2.customChars = "IRenaNtfsoerAcieVDcsG";
-                        rendererString += GenerateRandomString(randStrOpts2);
-                    }
+            if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) {
+                shadingLangString = baseVer;
+
+                int junkCount = rand() % 2 + 1;
+                for (int i = 0; i < junkCount; ++i) {
+                    shadingLangString += " ";
+                    RandomStringOptions junkOpts;
+                    junkOpts.minLength = 2;
+                    junkOpts.maxLength = 5;
+                    junkOpts.includeLowercase = false;
+                    junkOpts.includeUppercase = false;
+                    junkOpts.customChars = "IAneNDtVsaMIl";
+                    shadingLangString += GenerateRandomString(junkOpts);
                 }
+            } else {
+                shadingLangString = baseVer + " MobileGlues with glslang and SPIRV-Cross";
             }
-            return reinterpret_cast<const GLubyte*>(rendererString.c_str());
-            
-        case GL_SHADING_LANGUAGE_VERSION:
-            if (shadingLangString.empty()) {
-                std::string baseVer = (hardware->es_version < 310) ? "4.00" : "4.60";
-                
-                if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) {
-                    shadingLangString = baseVer;
-                    
-                    int junkCount = rand() % 2 + 1;
-                    for (int i = 0; i < junkCount; ++i) {
-                        shadingLangString += " ";
-                        RandomStringOptions junkOpts;
-                        junkOpts.minLength = 2;
-                        junkOpts.maxLength = 5;
-                        junkOpts.includeLowercase = false;
-                        junkOpts.includeUppercase = false;
-                        junkOpts.customChars = "IAneNDtVsaMIl";
-                        shadingLangString += GenerateRandomString(junkOpts);
-                    }
-                } else {
-                    shadingLangString = baseVer + " DesktopGlues with glslang and SPIRV-Cross";
-                }
-            }
-            return reinterpret_cast<const GLubyte*>(shadingLangString.c_str());
-            
-        case GL_EXTENSIONS: {
-#if defined(__APPLE__)
-            static std::string* appleCache = new std::string(GetExtensionsList());
-            return reinterpret_cast<const GLubyte*>(appleCache->c_str());
+        }
+
+        return reinterpret_cast<const GLubyte*>(shadingLangString.c_str());
+    }
+    case GL_EXTENSIONS: {
+#if !defined(__APPLE__)
+        static std::string cached;
+        cached = GetExtensionsList();
+        return (const GLubyte*)cached.c_str();
 #else
-            static const std::string& cached = GetExtensionsList();
-            return reinterpret_cast<const GLubyte*>(cached.c_str());
+        return (const GLubyte*)GetExtensionsList().c_str();
 #endif
-        }
-            
-        case GL_SETTINGS_MG: {
-            if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) 
-                return GLES.glGetString(name);
-                
-            static char* settings_string = nullptr;
-            if (settings_string) free(settings_string);
-            std::string tmp = dump_settings_string("  ");
-            settings_string = strdup(tmp.c_str());
-            return reinterpret_cast<const GLubyte*>(settings_string);
-        }
-            
-        case GL_VERSION + GL_BACKEND_GETTER_MG:
-        case GL_VENDOR + GL_BACKEND_GETTER_MG:
-        case GL_RENDERER + GL_BACKEND_GETTER_MG:
-        case GL_EXTENSIONS + GL_BACKEND_GETTER_MG:
-        case GL_SHADING_LANGUAGE_VERSION + GL_BACKEND_GETTER_MG:
-            if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled)
-                return GLES.glGetString(name - GL_BACKEND_GETTER_MG);
-            else
-                return GLES.glGetString(name);
-                
-        default:
+    }
+    case GL_SETTINGS_MG: {
+        if (global_settings.hide_mg_env_level >= HideMGEnvLevel::Level1) return GLES.glGetString(name);
+
+        static char* settings_string = nullptr;
+        std::string tmp = dump_settings_string("  ");
+        settings_string = strdup(tmp.c_str());
+        return reinterpret_cast<const GLubyte*>(settings_string);
+    }
+    case GL_VERSION + GL_BACKEND_GETTER_MG:
+    case GL_VENDOR + GL_BACKEND_GETTER_MG:
+    case GL_RENDERER + GL_BACKEND_GETTER_MG:
+    case GL_EXTENSIONS + GL_BACKEND_GETTER_MG:
+    case GL_SHADING_LANGUAGE_VERSION + GL_BACKEND_GETTER_MG:
+        if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled)
+            return GLES.glGetString(name - GL_BACKEND_GETTER_MG);
+        else
             return GLES.glGetString(name);
+    default:
+        return GLES.glGetString(name);
     }
 }
 
-const GLubyte * glGetStringi(GLenum name, GLuint index) {
-#if DEBUG
+const GLubyte* glGetStringi(GLenum name, GLuint index) {
     LOG()
-#endif
-    
-    struct StringCache {
-        GLenum name;
-        std::vector<std::string> parts;
-    };
-    
-    static std::vector<StringCache> caches;
-    static bool initialized = false;
-    
-    if (name == GL_EXTENSIONS + GL_BACKEND_GETTER_MG && 
-        global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
+    if (name == GL_EXTENSIONS + GL_BACKEND_GETTER_MG && global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
         return GLES.glGetStringi(name - GL_BACKEND_GETTER_MG, index);
     }
 
+    typedef struct {
+        GLenum name;
+        const char** parts;
+        GLuint count;
+    } StringCache;
+    static StringCache caches[] = {{GL_EXTENSIONS, nullptr, 0},
+                                   {GL_VENDOR, nullptr, 0},
+                                   {GL_VERSION, nullptr, 0},
+                                   {GL_SHADING_LANGUAGE_VERSION, nullptr, 0}};
+    static int initialized = 0;
     if (!initialized) {
-        caches = {
-            {GL_EXTENSIONS, {}},
-            {GL_VENDOR, {}},
-            {GL_VERSION, {}},
-            {GL_SHADING_LANGUAGE_VERSION, {}}
-        };
-        
-        for (auto &cache : caches) {
-            std::string str;
-            switch (cache.name) {
-                case GL_VENDOR:
-                    str = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
-                    cache.parts = split(str, ',');
-                    for (auto& s : cache.parts) {
-                        size_t start = s.find_first_not_of(" ");
-                        if (start != std::string::npos) s = s.substr(start);
-                    }
-                    break;
-                case GL_VERSION:
-                    str = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-                    cache.parts = split(str, ' ');
-                    break;
-                case GL_SHADING_LANGUAGE_VERSION:
-                    str = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
-                    cache.parts = split(str, ' ');
-                    break;
-                case GL_EXTENSIONS:
-                    str = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
-                    cache.parts = split(str, ' ');
-                    break;
+        for (auto& cache : caches) {
+            GLenum target = cache.name;
+            const GLubyte* str = nullptr;
+            const char* delimiter = " ";
+
+            switch (target) {
+            case GL_VENDOR:
+                str = glGetString(GL_VENDOR);
+                delimiter = ", ";
+                break;
+            case GL_VERSION:
+                str = glGetString(GL_VERSION);
+                delimiter = " .";
+                break;
+            case GL_SHADING_LANGUAGE_VERSION:
+                str = glGetString(GL_SHADING_LANGUAGE_VERSION);
+                break;
+            case GL_EXTENSIONS:
+                str = glGetString(GL_EXTENSIONS);
+                break;
+            default:
+                return GLES.glGetStringi(name, index);
             }
+
+            if (!str) continue;
+
+            std::string copy_str((const char*)str);
+            std::string token_str;
+            size_t start = 0;
+            size_t end = copy_str.find_first_of(delimiter);
+
+            while (end != std::string::npos) {
+                token_str = copy_str.substr(start, end - start);
+                cache.parts = (const char**)realloc(cache.parts, (cache.count + 1) * sizeof(char*));
+                cache.parts[cache.count++] = strdup(token_str.c_str());
+                start = end + 1;
+                end = copy_str.find_first_of(delimiter, start);
+            }
+            token_str = copy_str.substr(start); // Get the last token
+            cache.parts = (const char**)realloc(cache.parts, (cache.count + 1) * sizeof(char*));
+            cache.parts[cache.count++] = strdup(token_str.c_str());
         }
-        initialized = true;
+        initialized = 1;
     }
-    
-    for (auto &cache : caches) {
+
+    for (auto& cache : caches) {
         if (cache.name == name) {
-            if (index < cache.parts.size()) {
-                return reinterpret_cast<const GLubyte*>(cache.parts[index].c_str());
+            if (index >= cache.count) {
+                return nullptr;
             }
-            return nullptr;
+            return (const GLubyte*)cache.parts[index];
         }
     }
-    
-    return GLES.glGetStringi(name, index);
+
+    return nullptr;
 }
 
 void glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
-#if DEBUG
     LOG()
-#endif
     if (GLES.glGetQueryObjectivEXT) {
         GLES.glGetQueryObjectivEXT(id, pname, params);
+        CHECK_GL_ERROR
     }
-#if DEBUG
-    CHECK_GL_ERROR
-#endif
 }
 
 void glGetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params) {
-#if DEBUG
     LOG()
-#endif
     if (GLES.glGetQueryObjecti64vEXT) {
         GLES.glGetQueryObjecti64vEXT(id, pname, params);
+        CHECK_GL_ERROR
     }
-#if DEBUG
-    CHECK_GL_ERROR
-#endif
 }

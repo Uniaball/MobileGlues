@@ -41,17 +41,36 @@ extern "C"
 
     void* open_lib(const char** names, const char* override);
 
+// Resolve an EGL entry point from the backend library, once per call site.
+//
+// The initialiser is a lambda call rather than a `static bool first` flag, so
+// the compiler emits a thread-safe guard around it. The old shape was an
+// unsynchronised double-checked initialisation: both statics were
+// constant-initialised, so no guard was generated and nothing ordered the write
+// of the pointer against another thread's read of the flag. Two threads entering
+// any EGL wrapper for the first time could see `first == false` with the pointer
+// still null.
+//
+// A failed resolution is reported unconditionally: LOG_W compiles to nothing in
+// release builds (GLOBAL_DEBUG in gl/log.h), so the old warning never reached a
+// user's log and the caller went on to jump through the null pointer anyway.
 #define LOAD_EGL(name)                                                                                                 \
-    static name##_PTR egl_##name = NULL;                                                                               \
-    {                                                                                                                  \
-        static bool first = true;                                                                                      \
-        if (first) {                                                                                                   \
-            first = false;                                                                                             \
-            if (egl != NULL) {                                                                                         \
-                egl_##name = (name##_PTR)proc_address(egl, #name);                                                     \
-            }                                                                                                          \
-            if (egl_##name == NULL) LOG_W("Error: " #name " is NULL\n");                                               \
-        }                                                                                                              \
+    static name##_PTR egl_##name = []() -> name##_PTR {                                                                \
+        name##_PTR p = (egl != NULL) ? (name##_PTR)proc_address(egl, #name) : NULL;                                    \
+        if (p == NULL) LOG_W_FORCE("EGL entry point " #name " is not available in the backend library")                \
+        return p;                                                                                                      \
+    }(); /* the semicolon lives in the macro so the 56 existing call sites, which  \
+            were written against a block-shaped macro and carry none, still work */
+
+// Same, but bail out instead of calling through a null pointer. Use it for the
+// entry points a backend is genuinely allowed not to have -- the platform and
+// EXT variants -- where the old macro produced a crash rather than a failure the
+// caller could handle.
+#define LOAD_EGL_OR(name, onfail, retval)                                                                              \
+    LOAD_EGL(name)                                                                                                     \
+    if (egl_##name == NULL) {                                                                                          \
+        onfail;                                                                                                        \
+        return retval;                                                                                                 \
     }
 
 #define CLEAR_GL_ERROR                                                                                                 \
@@ -161,6 +180,20 @@ extern "C"
         int GL_EXT_texture_rg;
         int GL_EXT_texture_query_lod;
         int GL_EXT_draw_elements_base_vertex;
+        // Needed by the virtual enable table (gl/enable.cpp): each of these
+        // supplies a GL 4.6 enable capability that GLES 3.2 core does not have,
+        // using the same enum value as the desktop one. Without them the layer
+        // cannot tell "the driver really supports this" from "the driver will
+        // reject it", and glEnable behaves differently from device to device.
+        int GL_EXT_multisample_compatibility; // GL_MULTISAMPLE, GL_SAMPLE_ALPHA_TO_ONE
+        int GL_EXT_clip_cull_distance;       // GL_CLIP_DISTANCE0..7
+        int GL_EXT_depth_clamp;              // GL_DEPTH_CLAMP
+        int GL_EXT_sRGB_write_control;       // GL_FRAMEBUFFER_SRGB
+        int GL_NV_polygon_mode;              // GL_POLYGON_OFFSET_LINE / _POINT
+        int GL_OES_sample_shading;           // GL_SAMPLE_SHADING before ES 3.2
+        // GL_EXT_multi_draw_arrays deliberately absent: glext.h defines a macro of
+        // that exact name, and gl/multidraw.cpp already probes it lazily because it
+        // needs the entry points as well as the string.
     };
 
     extern struct gles_caps_t g_gles_caps;

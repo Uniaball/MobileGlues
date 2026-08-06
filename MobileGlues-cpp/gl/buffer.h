@@ -32,7 +32,11 @@ extern "C"
 
     GLuint find_real_buffer(GLuint key);
 
+    // key is a *_BINDING query enum, the kind glGetIntegerv is given.
     GLuint find_bound_buffer(GLenum key);
+    // target is a bind target, the kind glBindBuffer is given. Not interchangeable
+    // with the above: each rejects the other's enums and returns 0.
+    GLuint find_bound_buffer_by_target(GLenum target);
 
     GLuint find_bound_ssbo_at_index(GLuint index);
 

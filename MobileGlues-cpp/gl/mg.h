@@ -77,7 +77,9 @@ extern "C"
         GLuint current_draw_fbo;
     };
     typedef struct gl_state_s* gl_state_t;
-    extern gl_state_t gl_state;
+    // thread_local: EGL scopes the current context per thread, so two threads
+    // each holding a context must not share this pointer.
+    extern thread_local gl_state_t gl_state;
 
     GLenum pname_convert(GLenum pname);
     GLenum map_tex_target(GLenum target);

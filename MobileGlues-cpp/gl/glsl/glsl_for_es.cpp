@@ -321,10 +321,6 @@ std::string processOutColorLocations(const std::string& glslCode) {
     return std::regex_replace(glslCode, pattern, replacement);
 }
 
-bool checkIfAtomicCounterBufferEmulated(const std::string& glslCode) {
-    return glslCode.find(atomicCounterEmulatedWatermark) != std::string::npos;
-}
-
 std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_version, uint glsl_version,
                          int& return_code) {
     std::string sha256_string(glsl_code);
@@ -533,7 +529,7 @@ bool process_non_opaque_atomic_to_ssbo(std::string& source) {
     return true;
 }
 
-void process_sampler_buffer(std::string& source) {
+void process_sampler_buffer(std::string& source) { // a simplized version, should be rewritten in the future
     if (source.find("isamplerBuffer") == std::string::npos) {
         return;
     }
@@ -695,7 +691,7 @@ void inject_mg_macro_definition(std::string& glslCode) {
     glslCode.insert(insertionPos, macro_definitions);
 }
 
-std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* atomicCounterEmulated) {
+std::string preprocess_glsl(const std::string& glsl, GLenum shaderType) {
     std::string ret = glsl;
     ret = replace_line_starting_with(ret, "#line");
     replace_all(ret, "#ifdef GL_ARB_derivative_control", "#if 0");
@@ -716,7 +712,6 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
         process_sampler_buffer(ret);
     }
 
-    *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
     return ret;
 }
 
@@ -830,8 +825,7 @@ std::string spirv_to_essl(std::vector<unsigned int> spirv, uint essl_version, in
 static bool glslang_inited = false;
 
 std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_version, int& return_code) {
-    bool atomicCounterEmulated = false;
-    std::string correct_glsl_str = preprocess_glsl(glsl_code, glsl_type, &atomicCounterEmulated);
+    std::string correct_glsl_str = preprocess_glsl(glsl_code, glsl_type);
     LOG_D("Firstly converted GLSL:\n%s", correct_glsl_str.c_str())
     int glsl_version = get_or_add_glsl_version(correct_glsl_str);
 

@@ -6,6 +6,8 @@
 // End of Source File Header
 
 #include "FSR1.h"
+#include <mutex>
+#include <unordered_map>
 #include "FSRShaderSource.h"
 #include "../../config/settings.h"
 
@@ -422,18 +424,20 @@ void ApplyFSR() {
     }
 }
 
-void CheckResolutionChange() {
-    static GLsizei lastWidth = 0, lastHeight = 0;
-    static EGLDisplay display = eglGetCurrentDisplay();
-    static EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
+void CheckResolutionChange(EGLDisplay display, EGLSurface surface) {
     GLsizei width = 0, height = 0;
-    eglQuerySurface(display, surface, EGL_WIDTH, &width);
-    eglQuerySurface(display, surface, EGL_HEIGHT, &height);
-
-    if (width != lastWidth || height != lastHeight) {
-        lastWidth = width;
-        lastHeight = height;
-        OnResize(width, height);
+    LOAD_EGL(eglQuerySurface);
+    // Taken from the swap this is hooked into rather than latched into statics on
+    // first use. The old code kept the first display and surface it ever saw, so
+    // after a rotation or a surface rebuild it queried a destroyed surface every
+    // frame and the resolution never changed again.
+    if (display == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE) {
+        display = eglGetCurrentDisplay();
+        surface = eglGetCurrentSurface(EGL_DRAW);
+    }
+    egl_eglQuerySurface(display, surface, EGL_WIDTH, &width);
+    egl_eglQuerySurface(display, surface, EGL_HEIGHT, &height);
+    OnResize(width, height);
     }
 
     if (FSR1_Context::g_resolutionChanged) {
@@ -482,4 +486,67 @@ void glViewport(GLint x, GLint y, GLsizei w, GLsizei h) {
     // App-driven glViewport changes the GL viewport state behind FSR's back;
     // invalidate the FSR viewport cache so the next ApplyFSR re-sets it.
     FSR1_Context::g_viewportCacheValid = false;
+}
+
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct fsr1_ctx_state_t {
+    GLuint renderFBO = 0, renderTexture = 0, depthStencilRBO = 0;
+    GLuint quadVAO = 0, quadVBO = 0, fsrProgram = 0;
+    GLuint targetFBO = 0, targetTexture = 0, currentDrawFBO = 0;
+    GLsizei targetWidth = 0, targetHeight = 0, renderWidth = 0, renderHeight = 0;
+    bool initialised = false;
+};
+
+std::mutex g_fsr_mutex;
+std::unordered_map<unsigned long long, fsr1_ctx_state_t> g_fsr_states;
+fsr1_ctx_state_t g_fsr_default;
+thread_local unsigned long long g_fsr_current_id = 0;
+
+void store_into(fsr1_ctx_state_t& d) {
+    d.renderFBO = FSR1_Context::g_renderFBO;
+    d.renderTexture = FSR1_Context::g_renderTexture;
+    d.depthStencilRBO = FSR1_Context::g_depthStencilRBO;
+    d.quadVAO = FSR1_Context::g_quadVAO;
+    d.quadVBO = FSR1_Context::g_quadVBO;
+    d.fsrProgram = FSR1_Context::g_fsrProgram;
+    d.targetFBO = FSR1_Context::g_targetFBO;
+    d.targetTexture = FSR1_Context::g_targetTexture;
+    d.currentDrawFBO = FSR1_Context::g_currentDrawFBO;
+    d.targetWidth = FSR1_Context::g_targetWidth;
+    d.targetHeight = FSR1_Context::g_targetHeight;
+    d.renderWidth = FSR1_Context::g_renderWidth;
+    d.renderHeight = FSR1_Context::g_renderHeight;
+    d.initialised = fsrInitialized;
+}
+
+void load_from(const fsr1_ctx_state_t& s) {
+    FSR1_Context::g_renderFBO = s.renderFBO;
+    FSR1_Context::g_renderTexture = s.renderTexture;
+    FSR1_Context::g_depthStencilRBO = s.depthStencilRBO;
+    FSR1_Context::g_quadVAO = s.quadVAO;
+    FSR1_Context::g_quadVBO = s.quadVBO;
+    FSR1_Context::g_fsrProgram = s.fsrProgram;
+    FSR1_Context::g_targetFBO = s.targetFBO;
+    FSR1_Context::g_targetTexture = s.targetTexture;
+    FSR1_Context::g_currentDrawFBO = s.currentDrawFBO;
+    FSR1_Context::g_targetWidth = s.targetWidth;
+    FSR1_Context::g_targetHeight = s.targetHeight;
+    FSR1_Context::g_renderWidth = s.renderWidth;
+    FSR1_Context::g_renderHeight = s.renderHeight;
+    fsrInitialized = s.initialised;
+    // Left alone deliberately: g_dirty, g_resolutionChanged and the pending size
+    // describe work queued for the frame in flight, not the context's objects.
+}
+
+} // namespace
+
+void mg_fsr1_bind_context(unsigned long long ctx_id) {
+    if (ctx_id == g_fsr_current_id) return;
+    std::lock_guard<std::mutex> lock(g_fsr_mutex);
+    store_into(g_fsr_current_id == 0 ? g_fsr_default : g_fsr_states[g_fsr_current_id]);
+    load_from(ctx_id == 0 ? g_fsr_default : g_fsr_states[ctx_id]);
+    g_fsr_current_id = ctx_id;
 }

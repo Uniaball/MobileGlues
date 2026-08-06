@@ -68,9 +68,18 @@ namespace FSR1_Context {
 } // namespace FSR1_Context
 
 extern bool fsrInitialized;
+
+// Swap the FSR1 objects when the current context changes.
+//
+// Every name above is a GL object owned by the context that created it, and
+// gl/framebuffer.cpp redirects framebuffer 0 to g_renderFBO -- in a second
+// context that name refers to nothing, or to somebody else's object. The values
+// are saved and reloaded rather than reached through a pointer because they are
+// declared extern and read from several translation units.
+void mg_fsr1_bind_context(unsigned long long ctx_id);
 void ApplyFSR();
 void InitFSRResources();
-void CheckResolutionChange();
+void CheckResolutionChange(EGLDisplay display, EGLSurface surface);
 void OnResize(int width, int height);
 
 extern "C"

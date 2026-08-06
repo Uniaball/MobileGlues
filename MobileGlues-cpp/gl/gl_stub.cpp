@@ -36,7 +36,7 @@ STUB_FUNCTION_HEAD(void, glGetClipPlane, GLenum plane, GLdouble *equation ) STUB
 
 STUB_FUNCTION_HEAD(void, glEnableClientState, GLenum cap ) STUB_FUNCTION_END_NO_RETURN(void, glEnableClientState,cap)
 STUB_FUNCTION_HEAD(void, glDisableClientState, GLenum cap ) STUB_FUNCTION_END_NO_RETURN(void, glDisableClientState,cap)
-STUB_FUNCTION_HEAD(void, glGetDoublev, GLenum pname, GLdouble *params ) STUB_FUNCTION_END_NO_RETURN(void, glGetDoublev,pname,params)
+// STUB_FUNCTION_HEAD(void, glGetDoublev, GLenum pname, GLdouble *params ) STUB_FUNCTION_END_NO_RETURN(void, glGetDoublev,pname,params)   // implemented in gl/enable.cpp (was a no-op that never wrote params)
 
 STUB_FUNCTION_HEAD(void, glPushAttrib, GLbitfield mask ) STUB_FUNCTION_END_NO_RETURN(void, glPushAttrib,mask)
 STUB_FUNCTION_HEAD(void, glPopAttrib) STUB_FUNCTION_END_NO_RETURN(void, glPopAttrib)
@@ -425,7 +425,7 @@ STUB_FUNCTION_HEAD(void, glLoadTransposeMatrixf,const GLfloat* m); STUB_FUNCTION
 STUB_FUNCTION_HEAD(void, glLoadTransposeMatrixd,const GLdouble* m); STUB_FUNCTION_END_NO_RETURN(void, glLoadTransposeMatrixd,m)
 STUB_FUNCTION_HEAD(void, glMultTransposeMatrixf,const GLfloat* m); STUB_FUNCTION_END_NO_RETURN(void, glMultTransposeMatrixf,m)
 STUB_FUNCTION_HEAD(void, glMultTransposeMatrixd,const GLdouble* m); STUB_FUNCTION_END_NO_RETURN(void, glMultTransposeMatrixd,m)
-STUB_FUNCTION_HEAD(void, glMultiDrawArrays, GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArrays,mode,first,count,drawcount)
+// STUB_FUNCTION_HEAD(void, glMultiDrawArrays, GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArrays,mode,first,count,drawcount)   // implemented in gl/multidraw.cpp
 //STUB_FUNCTION_HEAD(void, glMultiDrawElements, GLenum mode, const GLsizei* count, GLenum type, const void* const*indices, GLsizei drawcount); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElements,mode,count,type,indices,drawcount)
 STUB_FUNCTION_HEAD(void, glPointParameterf, GLenum pname, GLfloat param); STUB_FUNCTION_END_NO_RETURN(void, glPointParameterf,pname,param)
 STUB_FUNCTION_HEAD(void, glPointParameterfv, GLenum pname, const GLfloat* params); STUB_FUNCTION_END_NO_RETURN(void, glPointParameterfv,pname,params)
@@ -500,7 +500,7 @@ STUB_FUNCTION_HEAD(void, glVertexAttrib4sv, GLuint index, const GLshort* v); STU
 STUB_FUNCTION_HEAD(void, glVertexAttrib4ubv, GLuint index, const GLubyte* v); STUB_FUNCTION_END_NO_RETURN(void, glVertexAttrib4ubv,index,v)
 STUB_FUNCTION_HEAD(void, glVertexAttrib4uiv, GLuint index, const GLuint* v); STUB_FUNCTION_END_NO_RETURN(void, glVertexAttrib4uiv,index,v)
 STUB_FUNCTION_HEAD(void, glVertexAttrib4usv, GLuint index, const GLushort* v); STUB_FUNCTION_END_NO_RETURN(void, glVertexAttrib4usv,index,v)
-STUB_FUNCTION_HEAD(void, glPrimitiveRestartIndex, GLuint index); STUB_FUNCTION_END_NO_RETURN(void, glPrimitiveRestartIndex,index)
+// STUB_FUNCTION_HEAD(void, glPrimitiveRestartIndex, GLuint index); STUB_FUNCTION_END_NO_RETURN(void, glPrimitiveRestartIndex,index)   // implemented in gl/enable.cpp
 STUB_FUNCTION_HEAD(void, glGetActiveUniformName, GLuint program, GLuint uniformIndex, GLsizei bufSize, GLsizei* length, GLchar* uniformName); STUB_FUNCTION_END_NO_RETURN(void, glGetActiveUniformName,program,uniformIndex,bufSize,length,uniformName)
 //STUB_FUNCTION_HEAD(void, glMultiDrawElementsBaseVertex, GLenum mode, const GLsizei* count, GLenum type, const void* const*indices, GLsizei drawcount, const GLint* basevertex); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsBaseVertex,mode,count,type,indices,drawcount,basevertex)
 STUB_FUNCTION_HEAD(void, glProvokingVertex, GLenum mode); STUB_FUNCTION_END_NO_RETURN(void, glProvokingVertex,mode)
@@ -620,9 +620,9 @@ STUB_FUNCTION_HEAD(void, glDepthRangeArrayv, GLuint first, GLsizei count, const 
 STUB_FUNCTION_HEAD(void, glDepthRangeIndexed, GLuint index, GLdouble n, GLdouble f); STUB_FUNCTION_END_NO_RETURN(void, glDepthRangeIndexed,index,n,f)
 STUB_FUNCTION_HEAD(void, glGetFloati_v, GLenum target, GLuint index, GLfloat* data); STUB_FUNCTION_END_NO_RETURN(void, glGetFloati_v,target,index,data)
 STUB_FUNCTION_HEAD(void, glGetDoublei_v, GLenum target, GLuint index, GLdouble* data); STUB_FUNCTION_END_NO_RETURN(void, glGetDoublei_v,target,index,data)
-STUB_FUNCTION_HEAD(void, glDrawArraysInstancedBaseInstance, GLenum mode, GLint first, GLsizei count, GLsizei instancecount, GLuint baseinstance); STUB_FUNCTION_END_NO_RETURN(void, glDrawArraysInstancedBaseInstance,mode,first,count,instancecount,baseinstance)
-STUB_FUNCTION_HEAD(void, glDrawElementsInstancedBaseInstance, GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLuint baseinstance); STUB_FUNCTION_END_NO_RETURN(void, glDrawElementsInstancedBaseInstance,mode,count,type,indices,instancecount,baseinstance)
-STUB_FUNCTION_HEAD(void, glDrawElementsInstancedBaseVertexBaseInstance, GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLint basevertex, GLuint baseinstance); STUB_FUNCTION_END_NO_RETURN(void, glDrawElementsInstancedBaseVertexBaseInstance,mode,count,type,indices,instancecount,basevertex,baseinstance)
+// STUB_FUNCTION_HEAD(void, glDrawArraysInstancedBaseInstance, GLenum mode, GLint first, GLsizei count, GLsizei instancecount, GLuint baseinstance); STUB_FUNCTION_END_NO_RETURN(void, glDrawArraysInstancedBaseInstance,mode,first,count,instancecount,baseinstance)   // moved to gl/drawing.cpp: draws instead of doing nothing
+// STUB_FUNCTION_HEAD(void, glDrawElementsInstancedBaseInstance, GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLuint baseinstance); STUB_FUNCTION_END_NO_RETURN(void, glDrawElementsInstancedBaseInstance,mode,count,type,indices,instancecount,baseinstance)   // moved to gl/drawing.cpp: draws instead of doing nothing
+// STUB_FUNCTION_HEAD(void, glDrawElementsInstancedBaseVertexBaseInstance, GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLint basevertex, GLuint baseinstance); STUB_FUNCTION_END_NO_RETURN(void, glDrawElementsInstancedBaseVertexBaseInstance,mode,count,type,indices,instancecount,basevertex,baseinstance)   // moved to gl/drawing.cpp: draws instead of doing nothing
 STUB_FUNCTION_HEAD(void, glGetActiveAtomicCounterBufferiv, GLuint program, GLuint bufferIndex, GLenum pname, GLint* params); STUB_FUNCTION_END_NO_RETURN(void, glGetActiveAtomicCounterBufferiv,program,bufferIndex,pname,params)
 STUB_FUNCTION_HEAD(void, glDrawTransformFeedbackInstanced, GLenum mode, GLuint id, GLsizei instancecount); STUB_FUNCTION_END_NO_RETURN(void, glDrawTransformFeedbackInstanced,mode,id,instancecount)
 STUB_FUNCTION_HEAD(void, glDrawTransformFeedbackStreamInstanced, GLenum mode, GLuint id, GLuint stream, GLsizei instancecount); STUB_FUNCTION_END_NO_RETURN(void, glDrawTransformFeedbackStreamInstanced,mode,id,stream,instancecount)
@@ -633,8 +633,8 @@ STUB_FUNCTION_HEAD(void, glInvalidateTexSubImage, GLuint texture, GLint level, G
 STUB_FUNCTION_HEAD(void, glInvalidateTexImage, GLuint texture, GLint level); STUB_FUNCTION_END_NO_RETURN(void, glInvalidateTexImage,texture,level)
 STUB_FUNCTION_HEAD(void, glInvalidateBufferSubData, GLuint buffer, GLintptr offset, GLsizeiptr length); STUB_FUNCTION_END_NO_RETURN(void, glInvalidateBufferSubData,buffer,offset,length)
 STUB_FUNCTION_HEAD(void, glInvalidateBufferData, GLuint buffer); STUB_FUNCTION_END_NO_RETURN(void, glInvalidateBufferData,buffer)
-STUB_FUNCTION_HEAD(void, glMultiDrawArraysIndirect, GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysIndirect,mode,indirect,drawcount,stride)
-STUB_FUNCTION_HEAD(void, glMultiDrawElementsIndirect, GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsIndirect,mode,type,indirect,drawcount,stride)
+// STUB_FUNCTION_HEAD(void, glMultiDrawArraysIndirect, GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysIndirect,mode,indirect,drawcount,stride)   // implemented in gl/multidraw.cpp
+// STUB_FUNCTION_HEAD(void, glMultiDrawElementsIndirect, GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsIndirect,mode,type,indirect,drawcount,stride)   // implemented in gl/multidraw.cpp
 STUB_FUNCTION_HEAD(GLint, glGetProgramResourceLocationIndex, GLuint program, GLenum programInterface, const GLchar* name); STUB_FUNCTION_END_NO_RETURN(GLint, glGetProgramResourceLocationIndex,program,programInterface,name)
 STUB_FUNCTION_HEAD(void, glShaderStorageBlockBinding, GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding); STUB_FUNCTION_END_NO_RETURN(void, glShaderStorageBlockBinding,program,storageBlockIndex,storageBlockBinding)
 STUB_FUNCTION_HEAD(void, glTextureView, GLuint texture, GLenum target, GLuint origtexture, GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers); STUB_FUNCTION_END_NO_RETURN(void, glTextureView,texture,target,origtexture,internalformat,minlevel,numlevels,minlayer,numlayers)
@@ -765,8 +765,8 @@ STUB_FUNCTION_HEAD(void, glGetnHistogram, GLenum target, GLboolean reset, GLenum
 STUB_FUNCTION_HEAD(void, glGetnMinmax, GLenum target, GLboolean reset, GLenum format, GLenum type, GLsizei bufSize, void* values); STUB_FUNCTION_END_NO_RETURN(void, glGetnMinmax,target,reset,format,type,bufSize,values)
 STUB_FUNCTION_HEAD(void, glTextureBarrier,void); STUB_FUNCTION_END_NO_RETURN(void, glTextureBarrier,)
 STUB_FUNCTION_HEAD(void, glSpecializeShader, GLuint shader, const GLchar* pEntryPoint, GLuint numSpecializationConstants, const GLuint* pConstantIndex, const GLuint* pConstantValue); STUB_FUNCTION_END_NO_RETURN(void, glSpecializeShader,shader,pEntryPoint,numSpecializationConstants,pConstantIndex,pConstantValue)
-STUB_FUNCTION_HEAD(void, glMultiDrawArraysIndirectCount, GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysIndirectCount,mode,indirect,drawcount,maxdrawcount,stride)
-STUB_FUNCTION_HEAD(void, glMultiDrawElementsIndirectCount, GLenum mode, GLenum type, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsIndirectCount,mode,type,indirect,drawcount,maxdrawcount,stride)
+// STUB_FUNCTION_HEAD(void, glMultiDrawArraysIndirectCount, GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysIndirectCount,mode,indirect,drawcount,maxdrawcount,stride)   // reported (not implemented) in gl/multidraw.cpp
+// STUB_FUNCTION_HEAD(void, glMultiDrawElementsIndirectCount, GLenum mode, GLenum type, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsIndirectCount,mode,type,indirect,drawcount,maxdrawcount,stride)   // reported (not implemented) in gl/multidraw.cpp
 STUB_FUNCTION_HEAD(void, glPolygonOffsetClamp, GLfloat factor, GLfloat units, GLfloat clamp); STUB_FUNCTION_END_NO_RETURN(void, glPolygonOffsetClamp,factor,units,clamp)
 STUB_FUNCTION_HEAD(GLuint64, glGetTextureHandleARB, GLuint texture); STUB_FUNCTION_END_NO_RETURN(GLuint64, glGetTextureHandleARB,texture)
 STUB_FUNCTION_HEAD(GLuint64, glGetTextureSamplerHandleARB, GLuint texture, GLuint sampler); STUB_FUNCTION_END_NO_RETURN(GLuint64, glGetTextureSamplerHandleARB,texture,sampler)
@@ -874,8 +874,8 @@ STUB_FUNCTION_HEAD(void, glHistogram, GLenum target, GLsizei width, GLenum inter
 STUB_FUNCTION_HEAD(void, glMinmax, GLenum target, GLenum internalformat, GLboolean sink); STUB_FUNCTION_END_NO_RETURN(void, glMinmax,target,internalformat,sink)
 STUB_FUNCTION_HEAD(void, glResetHistogram, GLenum target); STUB_FUNCTION_END_NO_RETURN(void, glResetHistogram,target)
 STUB_FUNCTION_HEAD(void, glResetMinmax, GLenum target); STUB_FUNCTION_END_NO_RETURN(void, glResetMinmax,target)
-STUB_FUNCTION_HEAD(void, glMultiDrawArraysIndirectCountARB, GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysIndirectCountARB,mode,indirect,drawcount,maxdrawcount,stride)
-STUB_FUNCTION_HEAD(void, glMultiDrawElementsIndirectCountARB, GLenum mode, GLenum type, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsIndirectCountARB,mode,type,indirect,drawcount,maxdrawcount,stride)
+// STUB_FUNCTION_HEAD(void, glMultiDrawArraysIndirectCountARB, GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysIndirectCountARB,mode,indirect,drawcount,maxdrawcount,stride)   // aliased in gl/multidraw.cpp
+// STUB_FUNCTION_HEAD(void, glMultiDrawElementsIndirectCountARB, GLenum mode, GLenum type, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsIndirectCountARB,mode,type,indirect,drawcount,maxdrawcount,stride)   // aliased in gl/multidraw.cpp
 STUB_FUNCTION_HEAD(void, glCurrentPaletteMatrixARB, GLint index); STUB_FUNCTION_END_NO_RETURN(void, glCurrentPaletteMatrixARB,index)
 STUB_FUNCTION_HEAD(void, glMatrixIndexubvARB, GLint size, const GLubyte* indices); STUB_FUNCTION_END_NO_RETURN(void, glMatrixIndexubvARB,size,indices)
 STUB_FUNCTION_HEAD(void, glMatrixIndexusvARB, GLint size, const GLushort* indices); STUB_FUNCTION_END_NO_RETURN(void, glMatrixIndexusvARB,size,indices)
@@ -1689,8 +1689,8 @@ STUB_FUNCTION_HEAD(void, glTextureStorageMem1DEXT, GLuint texture, GLsizei level
 STUB_FUNCTION_HEAD(void, glImportMemoryFdEXT, GLuint memory, GLuint64 size, GLenum handleType, GLint fd); STUB_FUNCTION_END_NO_RETURN(void, glImportMemoryFdEXT,memory,size,handleType,fd)
 STUB_FUNCTION_HEAD(void, glImportMemoryWin32HandleEXT, GLuint memory, GLuint64 size, GLenum handleType, void* handle); STUB_FUNCTION_END_NO_RETURN(void, glImportMemoryWin32HandleEXT,memory,size,handleType,handle)
 STUB_FUNCTION_HEAD(void, glImportMemoryWin32NameEXT, GLuint memory, GLuint64 size, GLenum handleType, const void* name); STUB_FUNCTION_END_NO_RETURN(void, glImportMemoryWin32NameEXT,memory,size,handleType,name)
-STUB_FUNCTION_HEAD(void, glMultiDrawArraysEXT, GLenum mode, const GLint* first, const GLsizei* count, GLsizei primcount); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysEXT,mode,first,count,primcount)
-STUB_FUNCTION_HEAD(void, glMultiDrawElementsEXT, GLenum mode, const GLsizei* count, GLenum type, const void* const*indices, GLsizei primcount); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsEXT,mode,count,type,indices,primcount)
+// STUB_FUNCTION_HEAD(void, glMultiDrawArraysEXT, GLenum mode, const GLint* first, const GLsizei* count, GLsizei primcount); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawArraysEXT,mode,first,count,primcount)   // aliased in gl/multidraw.cpp
+// STUB_FUNCTION_HEAD(void, glMultiDrawElementsEXT, GLenum mode, const GLsizei* count, GLenum type, const void* const*indices, GLsizei primcount); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsEXT,mode,count,type,indices,primcount)   // aliased in gl/multidraw.cpp
 STUB_FUNCTION_HEAD(void, glSampleMaskEXT, GLclampf value, GLboolean invert); STUB_FUNCTION_END_NO_RETURN(void, glSampleMaskEXT,value,invert)
 STUB_FUNCTION_HEAD(void, glSamplePatternEXT, GLenum pattern); STUB_FUNCTION_END_NO_RETURN(void, glSamplePatternEXT,pattern)
 STUB_FUNCTION_HEAD(void, glColorTableEXT, GLenum target, GLenum internalFormat, GLsizei width, GLenum format, GLenum type, const void* table); STUB_FUNCTION_END_NO_RETURN(void, glColorTableEXT,target,internalFormat,width,format,type,table)

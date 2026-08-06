@@ -165,6 +165,9 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     gl/mg.cpp
     gl/buffer.cpp
     gl/getter.cpp
+    gl/enable.cpp
+    gl/restart.cpp
+    egl/context.cpp
     gl/pixel.cpp
     gl/random_string_gen.cpp
     gl/ExtWrappers/DSAWrapper.cpp

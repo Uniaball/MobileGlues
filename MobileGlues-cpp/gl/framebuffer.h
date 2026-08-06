@@ -8,20 +8,19 @@
 #ifndef MOBILEGLUES_FRAMEBUFFER_H
 #define MOBILEGLUES_FRAMEBUFFER_H
 
+#include <vector>
 #include <GL/gl.h>
 #include <cstddef>
-#include <array>
 
 struct attachment_t {
     GLenum textarget;
     GLuint texture;
     GLint level;
 };
-
 struct framebuffer_t {
     bool initialized = false;
     bool color_attachments_all_none = false;
-    std::array<attachment_t, 8> color_attachments{};
+    attachment_t* color_attachments = nullptr;
     attachment_t depth_attachment = {0};
     attachment_t stencil_attachment = {0};
 };
@@ -47,5 +46,10 @@ extern "C"
 #endif
 
 void InitFramebufferMap(size_t expectedSize);
+
+// The framebuffer table of the current context. It used to be a plain global
+// that gl/gl.cpp reached by extern; it is per-context now, so it has to be
+// fetched rather than named.
+std::vector<framebuffer_t>& mg_framebuffers();
 
 #endif // MOBILEGLUES_FRAMEBUFFER_H
