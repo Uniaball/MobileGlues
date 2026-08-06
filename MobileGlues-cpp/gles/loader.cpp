@@ -217,6 +217,10 @@ void InitGLESCapabilities() {
         AppendExtension("GL_ARB_compute_shader");
     }
 
+    if (global_settings.ext_shader_atomic_counters) {
+        AppendExtension("GL_ARB_shader_atomic_counters");
+    }
+
     if (global_settings.ext_direct_state_access) {
         AppendExtension("GL_ARB_direct_state_access");
         AppendExtension("GL_EXT_direct_state_access");

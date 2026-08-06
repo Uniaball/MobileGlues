@@ -21,6 +21,7 @@ void init_settings() {
     global_settings.angle = AngleMode::Disabled;
     global_settings.ignore_error = IgnoreErrorLevel::Partial;
     global_settings.ext_compute_shader = false;
+    global_settings.ext_shader_atomic_counters = false;
     global_settings.max_glsl_cache_size = 30 * 1024 * 1024;
     global_settings.angle_depth_clear_fix_mode = AngleDepthClearFixMode::Disabled;
     global_settings.ext_direct_state_access = true;
@@ -43,6 +44,7 @@ void init_settings() {
     NoErrorConfig noErrorConfig =
         success ? static_cast<NoErrorConfig>(config_get_int("enableNoError")) : NoErrorConfig::Auto;
     bool enableExtComputeShader = success ? (config_get_int("enableExtComputeShader") > 0) : false;
+    bool enableExtShaderAtomicCounters = success ? (config_get_int("enableExtShaderAtomicCounters") > 0) : false;
     bool enableExtTimerQuery = success ? (config_get_int("enableExtTimerQuery") > 0) : false;
     bool enableExtDirectStateAccess = success ? (config_get_int("enableExtDirectStateAccess") > 0) : false;
     AngleDepthClearFixMode angleDepthClearFixMode =
@@ -109,6 +111,7 @@ void init_settings() {
         angleConfig = AngleConfig::DisableIfPossible;
         noErrorConfig = NoErrorConfig::Auto;
         enableExtComputeShader = false;
+        enableExtShaderAtomicCounters = false;
         enableExtTimerQuery = true;
         enableExtDirectStateAccess = true;
         maxGlslCacheSize = 0;
@@ -188,6 +191,7 @@ void init_settings() {
     }
 
     global_settings.ext_compute_shader = enableExtComputeShader;
+    global_settings.ext_shader_atomic_counters = enableExtShaderAtomicCounters;
     global_settings.ext_timer_query = enableExtTimerQuery;
     global_settings.ext_direct_state_access = enableExtDirectStateAccess;
     global_settings.max_glsl_cache_size = maxGlslCacheSize;
@@ -202,6 +206,8 @@ void init_settings() {
     LOG_V("[MobileGlues] Setting: ignoreError                 = %i", static_cast<int>(global_settings.ignore_error))
     LOG_V("[MobileGlues] Setting: enableExtComputeShader      = %s",
           global_settings.ext_compute_shader ? "true" : "false")
+    LOG_V("[MobileGlues] Setting: enableExtShaderAtomicCounters = %s",
+          global_settings.ext_shader_atomic_counters ? "true" : "false")
     LOG_V("[MobileGlues] Setting: enableExtTimerQuery         = %s", global_settings.ext_timer_query ? "true" : "false")
     LOG_V("[MobileGlues] Setting: enableExtDirectStateAccess  = %s",
           global_settings.ext_direct_state_access ? "true" : "false")
@@ -570,6 +576,7 @@ std::string dump_settings_string(std::string prefix) {
     ss << "\n";
 
     ss << prefix << "ExtComputeShader: " << (global_settings.ext_compute_shader ? "True" : "False") << "\n";
+    ss << prefix << "ExtShaderAtomicCounters: " << (global_settings.ext_shader_atomic_counters ? "True" : "False") << "\n";
     ss << prefix << "ExtTimerQuery: " << (global_settings.ext_timer_query ? "True" : "False") << "\n";
     ss << prefix << "ExtDirectStateAccess: " << (global_settings.ext_direct_state_access ? "True" : "False") << "\n";
     ss << prefix << "MaxGlslCacheSize: " << (global_settings.max_glsl_cache_size / 1024 / 1024) << "MB\n";
