@@ -451,6 +451,8 @@ void glBindBuffer(GLenum target, GLuint buffer) {
     if (target == GL_ELEMENT_ARRAY_BUFFER) {
         update_vao_ibo_binding(find_bound_array(), buffer);
     }
+
+    if (!has_buffer(buffer) || buffer == 0) {
         GLES.glBindBuffer(target, buffer);
         CHECK_GL_ERROR
         return;
@@ -493,6 +495,8 @@ void bindAllAtomicCounterAsSSBO() {
         }
     }
 }
+
+void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
     LOG()
     LOG_D("glBindBufferRange, target = %s, index = %d, buffer = %d, offset = %p, size = %zi", glEnumToString(target),
           index, buffer, (void*)offset, size)
