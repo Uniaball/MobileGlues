@@ -67,6 +67,12 @@ extern "C"
     GLAPI GLAPIENTRY void glMemoryBarrier(GLbitfield barriers);
     GLAPI GLAPIENTRY void glUniform1i(GLint location, GLint v0);
 
+    // Indirect forms need the same atomic-counter-to-SSBO override, so they are
+    // implemented here instead of being plain pass-throughs.
+    GLAPI GLAPIENTRY void glDispatchComputeIndirect(GLintptr indirect);
+    GLAPI GLAPIENTRY void glDrawArraysIndirect(GLenum mode, const void* indirect);
+    GLAPI GLAPIENTRY void glDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect);
+
 #ifdef __cplusplus
 }
 #endif

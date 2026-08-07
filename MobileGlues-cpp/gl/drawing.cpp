@@ -107,6 +107,10 @@ void setupBufferTextureUniforms(GLuint program) {
 
 void prepareForDraw() {
     LOG_D("prepareForDraw...")
+    // Undo the SSBO overrides a previous command left behind, then put the
+    // atomic counter buffers in place for the draw that is about to run.
+    restoreAtomicCounterAsSSBO();
+    bindAllAtomicCounterAsSSBO();
     if (hardware->emulate_texture_buffer && g_current_program_needs_sampler_emulation) {
         setupBufferTextureUniforms(gl_state->current_program);
     }
@@ -153,19 +157,14 @@ void glUniform1i(GLint location, GLint v0) {
     CHECK_GL_ERROR
 }
 
-void bindAllAtomicCounterAsSSBO();
 void glDispatchCompute(GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z) {
     LOG()
     LOG_D("glDispatchCompute, num_groups_x: %d, num_groups_y: %d, num_groups_z: %d", num_groups_x, num_groups_y,
           num_groups_z)
-    if (program_map_is_atomic_counter_emulated[gl_state->current_program] &&
-        global_settings.ext_shader_atomic_counters) {
-        bindAllAtomicCounterAsSSBO();
-        LOG_D("Atomic counters bound as SSBOs for program %d", gl_state->current_program);
-    } else {
-        LOG_D("No atomic counters bound as SSBOs for program %d", gl_state->current_program);
-    }
+    restoreAtomicCounterAsSSBO();
+    bindAllAtomicCounterAsSSBO();
     GLES.glDispatchCompute(num_groups_x, num_groups_y, num_groups_z);
+    restoreAtomicCounterAsSSBO();
     CHECK_GL_ERROR
 }
 
@@ -417,4 +416,34 @@ void glDrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, G
             baseinstance);
     }
     glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+}
+
+// glDraw*Indirect and glDispatchComputeIndirect were plain pass-throughs, but
+// they also need the atomic counter -> SSBO override around the driver call.
+void glDrawArraysIndirect(GLenum mode, const void* indirect) {
+    LOG()
+    LOG_D("glDrawArraysIndirect, mode: %d, indirect: %p", mode, indirect)
+    prepareForDraw();
+    GLES.glDrawArraysIndirect(mode, indirect);
+    restoreAtomicCounterAsSSBO();
+    CHECK_GL_ERROR
+}
+
+void glDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
+    LOG()
+    LOG_D("glDrawElementsIndirect, mode: %d, type: %d, indirect: %p", mode, type, indirect)
+    prepareForDraw();
+    GLES.glDrawElementsIndirect(mode, type, indirect);
+    restoreAtomicCounterAsSSBO();
+    CHECK_GL_ERROR
+}
+
+void glDispatchComputeIndirect(GLintptr indirect) {
+    LOG()
+    LOG_D("glDispatchComputeIndirect, indirect: %p", (void*)indirect)
+    restoreAtomicCounterAsSSBO();
+    bindAllAtomicCounterAsSSBO();
+    GLES.glDispatchComputeIndirect(indirect);
+    restoreAtomicCounterAsSSBO();
+    CHECK_GL_ERROR
 }

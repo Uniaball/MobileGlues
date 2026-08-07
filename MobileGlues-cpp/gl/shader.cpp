@@ -80,6 +80,16 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         LOG_D("[INFO] [Shader] Direct shader source: ")
         LOG_D("%s", glsl_src.c_str())
         essl_src = glsl_src;
+        // A shader that already runs on this GLES still needs the emulation pass
+        // when the driver cannot express native atomic counters at all: direct
+        // shaders were bypassing it entirely, so their atomic_uint bindings landed
+        // on a target the driver rejects.
+        if (global_settings.ext_shader_atomic_counters) {
+            if (process_non_opaque_atomic_to_ssbo(essl_src)) {
+                shader_map_is_atomic_counter_emulated[shader] = true;
+                LOG_D("[INFO] [Shader] Atomic counter emulated in direct shader %d", shader)
+            }
+        }
     } else {
         GLint shaderType;
         GLES.glGetShaderiv(shader, GL_SHADER_TYPE, &shaderType);

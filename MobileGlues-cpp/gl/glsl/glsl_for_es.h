@@ -30,4 +30,10 @@ std::string GLSLtoGLSLES_1(const char* glsl_code, GLenum glsl_type, uint esversi
 std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_version, int& return_code);
 int getGLSLVersion(const char* glsl_code);
 
+// Rewrites `layout(...) uniform atomic_uint ...;` declarations and their
+// atomicCounter* calls into an SSBO + atomicAdd scheme. Returns true only when
+// an `atomic_uint` declaration was actually converted; shaders merely mentioning
+// the word (a comment, an unrelated identifier) are left as-is and report false.
+bool process_non_opaque_atomic_to_ssbo(std::string& source);
+
 #endif

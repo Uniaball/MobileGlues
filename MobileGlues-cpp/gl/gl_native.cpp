@@ -259,9 +259,8 @@ NATIVE_FUNCTION_HEAD(void, glInvalidateSubFramebuffer, GLenum target, GLsizei nu
 //NATIVE_FUNCTION_HEAD(void, glTexStorage3D, GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth) NATIVE_FUNCTION_END_NO_RETURN(void, glTexStorage3D, target,levels,internalformat,width,height,depth)
 NATIVE_FUNCTION_HEAD(void, glGetInternalformativ, GLenum target, GLenum internalformat, GLenum pname, GLsizei bufSize, GLint *params) NATIVE_FUNCTION_END_NO_RETURN(void, glGetInternalformativ, target,internalformat,pname,bufSize,params)
 //NATIVE_FUNCTION_HEAD(void, glDispatchCompute, GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z) NATIVE_FUNCTION_END_NO_RETURN(void, glDispatchCompute, num_groups_x,num_groups_y,num_groups_z)
-NATIVE_FUNCTION_HEAD(void, glDispatchComputeIndirect, GLintptr indirect) NATIVE_FUNCTION_END_NO_RETURN(void, glDispatchComputeIndirect, indirect)
-NATIVE_FUNCTION_HEAD(void, glDrawArraysIndirect, GLenum mode, const void *indirect) NATIVE_FUNCTION_END_NO_RETURN(void, glDrawArraysIndirect, mode,indirect)
-NATIVE_FUNCTION_HEAD(void, glDrawElementsIndirect, GLenum mode, GLenum type, const void *indirect) NATIVE_FUNCTION_END_NO_RETURN(void, glDrawElementsIndirect, mode,type,indirect)
+// glDispatchComputeIndirect / glDrawArraysIndirect / glDrawElementsIndirect are
+// implemented in gl/drawing.cpp where the atomic counter shift is applied.
 NATIVE_FUNCTION_HEAD(void, glFramebufferParameteri, GLenum target, GLenum pname, GLint param) NATIVE_FUNCTION_END_NO_RETURN(void, glFramebufferParameteri, target,pname,param)
 NATIVE_FUNCTION_HEAD(void, glGetFramebufferParameteriv, GLenum target, GLenum pname, GLint *params) NATIVE_FUNCTION_END_NO_RETURN(void, glGetFramebufferParameteriv, target,pname,params)
 NATIVE_FUNCTION_HEAD(void, glGetProgramInterfaceiv, GLuint program, GLenum programInterface, GLenum pname, GLint *params) NATIVE_FUNCTION_END_NO_RETURN(void, glGetProgramInterfaceiv, program,programInterface,pname,params)

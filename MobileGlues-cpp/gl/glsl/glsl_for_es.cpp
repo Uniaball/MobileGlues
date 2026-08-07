@@ -456,52 +456,187 @@ static size_t find_insertion_point(const std::string& glsl) {
 
     return insertion_point;
 }
-
 bool process_non_opaque_atomic_to_ssbo(std::string& source) {
     if (source.find("atomicCounter") == std::string::npos) return false;
 
-    std::set<std::string> atomic_vars;
-    std::map<std::string, std::string> binding_map;
+    struct CounterDecl {
+        std::string var;
+        int binding = -1;
+        int offset = -1;
+        size_t pos = 0;
+        size_t len = 0;
+    };
+    std::vector<CounterDecl> decls;
+
     static const std::regex decl_rx(
-        R"(layout\s*\(\s*binding\s*=\s*(\d+)\s*(?:,\s*offset\s*=\s*(\d+)\s*)?\)\s*uniform\s+atomic_uint\s+(\w+)\s*;)",
+        R"(layout\s*\(\s*([^)]*?)\s*\)\s*uniform\s+atomic_uint\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;)",
         std::regex::icase);
+    static const std::regex bind_rx(R"(binding\s*=\s*(\d+))", std::regex::icase);
+    static const std::regex off_rx(R"(offset\s*=\s*(\d+))", std::regex::icase);
 
-    std::smatch m;
-    auto it = source.cbegin();
-    while (std::regex_search(it, source.cend(), m, decl_rx)) {
-        size_t prefix = std::distance(source.cbegin(), it);
-        size_t match_pos = prefix + m.position(0);
-        size_t match_len = m.length(0);
+    {
+        std::smatch m;
+        auto it = source.cbegin();
+        while (std::regex_search(it, source.cend(), m, decl_rx)) {
+            size_t pos = std::distance(source.cbegin(), it) + m.position(0);
+            size_t len = m.length(0);
+            std::smatch b, o;
+            const std::string quals = m[1].str();
+            int binding = -1;
+            int offset = -1;
+            if (std::regex_search(quals, b, bind_rx)) binding = std::stoi(b[1].str());
+            if (std::regex_search(quals, o, off_rx)) offset = std::stoi(o[1].str());
 
-        std::string binding = m[1].str();
-        std::string var = m[3].str();
-        atomic_vars.insert(var);
-        binding_map[var] = binding;
-
-        std::string repl = "layout(std430, binding=" + binding + ") buffer AtomicCounterSSBO_" + binding +
-                           " {\n"
-                           "    uint " +
-                           var +
-                           ";\n"
-                           "};\n";
-        source.replace(match_pos, match_len, repl);
-
-        it = source.cbegin() + match_pos + repl.size();
+            // One declaration may list several counters: `uniform atomic_uint a, b;`
+            // They share the layout qualifiers; only the first takes the explicit
+            // offset, the rest fall into declaration order.
+            const std::string names_str = m[2].str();
+            std::vector<std::string> names;
+            size_t comma;
+            size_t start = 0;
+            while ((comma = names_str.find(',', start)) != std::string::npos) {
+                names.push_back(names_str.substr(start, comma - start));
+                start = comma + 1;
+            }
+            names.push_back(names_str.substr(start));
+            for (size_t idx = 0; idx < names.size(); ++idx) {
+                std::string name = names[idx];
+                const size_t bpos = name.find_first_not_of(" \t");
+                const size_t epos = name.find_last_not_of(" \t");
+                name = (bpos == std::string::npos) ? "" : name.substr(bpos, epos - bpos + 1);
+                if (name.empty()) continue;
+                // Without a binding qualifier there is no buffer to attach the
+                // counter to; leave such declarations untouched (they will fail to
+                // compile with the still-unescaped atomic operations, which is the
+                // source shader's bug).
+                if (binding < 0) continue;
+                CounterDecl decl;
+                decl.var = name;
+                decl.pos = pos;
+                decl.len = len;
+                decl.binding = binding;
+                decl.offset = (idx == 0 && offset >= 0) ? offset : -1;
+                decls.push_back(decl);
+            }
+            it = source.cbegin() + pos + len;
+        }
     }
 
-    if (atomic_vars.empty()) return true;
+    // No `atomic_uint` block made it into a usable declaration. `source` may
+    // only mention the word inside a comment or an unrelated (plain-uint) name,
+    // so this shader needs no emulation and must NOT be flagged as emulated.
+    if (decls.empty()) return false;
+
+    // Counters sharing one binding live in the same buffer. Give implicit offsets
+    // in declaration order (4 bytes per counter) so explicit offsets keep working.
+    std::map<int, std::vector<size_t>> by_binding;
+    for (size_t i = 0; i < decls.size(); ++i) by_binding[decls[i].binding].push_back(i);
+    for (auto&& [binding, members] : by_binding) {
+        std::sort(members.begin(), members.end(), [&](size_t a, size_t b) { return decls[a].pos < decls[b].pos; });
+        int cursor = 0;
+        for (size_t i : members) {
+            if (decls[i].offset == -1) decls[i].offset = cursor;
+            cursor = decls[i].offset + 4;
+        }
+    }
+
+    std::set<std::string> atomic_vars;
+    std::set<int> emitted;
+    std::map<int, size_t> binding_block_pos;
+    bool helper_emitted = false;
+    std::vector<std::pair<size_t, std::pair<size_t, std::string>>> replacements;
+
+    // atomicCounterDecrement saturates at zero and reports the post-clamp
+    // value. `atomicAdd(mem, uint(-1))` would wrap below zero and cannot
+    // produce the new value, so use a compare-and-swap loop that serves both.
+    static const char* atomicCounterHelper = R"(
+uint mgAtomicCounterDecrement(inout uint value) {
+    uint current = value;
+    for (;;) {
+        uint next = (current == 0u) ? 0u : current - 1u;
+        uint previous = atomicCompSwap(value, current, next);
+        if (previous == current) {
+            memoryBarrierBuffer();
+            return next;
+        }
+        current = previous;
+    }
+}
+)";
+
+    for (size_t i = 0; i < decls.size(); ++i) {
+        atomic_vars.insert(decls[i].var);
+        if (emitted.count(decls[i].binding)) {
+            // A sibling of an already-processed binding. Multiple counters can
+            // share one declaration (`uniform atomic_uint a, b;`): they then
+            // also share the source position the block replacement consumed, so
+            // nothing is left to erase there. Only a genuinely separate
+            // declaration at a different position gets deleted.
+            if (binding_block_pos[decls[i].binding] != decls[i].pos) {
+                replacements.push_back({decls[i].pos, {decls[i].len, ""}});
+            }
+            continue;
+        }
+        emitted.insert(decls[i].binding);
+        binding_block_pos[decls[i].binding] = decls[i].pos;
+
+        // One block per binding; members keep their declared byte offsets, with
+        // padding inserted where gaps appear, so std430 mirrors the layout the
+        // original atomic buffer had.
+        std::vector<size_t> members = by_binding[decls[i].binding];
+        std::sort(members.begin(), members.end(),
+                  [&](size_t a, size_t b) { return decls[a].offset < decls[b].offset; });
+
+        std::string block = "layout(std430, binding=" + std::to_string(decls[i].binding) +
+                            ") buffer AtomicCounterSSBO_" + std::to_string(decls[i].binding) + " {\n";
+        int cursor = 0;
+        int pad = 0;
+        for (size_t mi : members) {
+            int gap = decls[mi].offset - cursor;
+            if (gap > 0) {
+                block += "    uint pad_" + std::to_string(decls[i].binding) + "_" + std::to_string(pad++) + "[" +
+                         std::to_string(gap / 4) + "];\n";
+            }
+            block += "    uint " + decls[mi].var + ";\n";
+            cursor = decls[mi].offset + 4;
+        }
+        block += "};\n";
+        // Saturating decrement needs a CAS loop; emit the helper once, directly
+        // after the first block, so its definition precedes every use.
+        if (!helper_emitted) {
+            block += atomicCounterHelper;
+            helper_emitted = true;
+        }
+        replacements.push_back({decls[i].pos, {decls[i].len, std::move(block)}});
+    }
+
+    // Replace from the back so earlier positions stay valid.
+    for (auto rit = replacements.rbegin(); rit != replacements.rend(); ++rit) {
+        source.replace(rit->first, rit->second.first, rit->second.second);
+    }
 
     for (const auto& var : atomic_vars) {
-        static const std::regex incRx(R"(\batomicCounterIncrement\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
-        source = std::regex_replace(source, incRx, "atomicAdd(" + var + ", 1u)");
+        // These are built per variable; do not make them static or the regexes
+        // stay bound to the first variable forever.
+        //
+        // The ES shared-memory/SSBO atomics return the value *before* the
+        // operation, while atomicCounterIncrement/Add promise the *new* value,
+        // so the raw return has to be corrected with an extra add.
+        const std::regex incRx(R"(\batomicCounterIncrement\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
+        source = std::regex_replace(source, incRx, "(atomicAdd(" + var + ", 1u) + 1u)");
 
-        static const std::regex decRx(R"(\batomicCounterDecrement\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
-        source = std::regex_replace(source, decRx, "atomicAdd(" + var + ", uint(-1))");
+        // atomicCounterDecrement saturates at zero instead of wrapping, which a
+        // plain atomicAdd(..., uint(-1)) cannot express. A CAS loop that clamps
+        // to 0 handles it (see the helper injected next to the first block).
+        const std::regex decRx(R"(\batomicCounterDecrement\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
+        source = std::regex_replace(source, decRx, "mgAtomicCounterDecrement(" + var + ")");
 
-        static const std::regex addRx(R"(\batomicCounterAdd\s*\(\s*)" + var + R"(\s*,\s*([^)]+)\s*\))", std::regex::icase);
-        source = std::regex_replace(source, addRx, "atomicAdd(" + var + ", $1)");
+        // atomicCounterAdd returns the incremented (new) value.
+        const std::regex addRx(R"(\batomicCounterAdd\s*\(\s*)" + var + R"(\s*,\s*([^)]+)\s*\))",
+                               std::regex::icase);
+        source = std::regex_replace(source, addRx, "(atomicAdd(" + var + ", ($1)) + ($1))");
 
-        static const std::regex cntRx(R"(\batomicCounter\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
+        const std::regex cntRx(R"(\batomicCounter\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
         source = std::regex_replace(source, cntRx, var);
     }
 

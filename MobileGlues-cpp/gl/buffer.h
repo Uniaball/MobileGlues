@@ -40,6 +40,12 @@ extern "C"
 
     GLuint find_bound_ssbo_at_index(GLuint index);
 
+    // Atomic-counter emulation: apply/undo the SSBO binding overrides used
+    // while an emulated program draws or dispatches. Only meaningful when
+    // global_settings.ext_shader_atomic_counters is on.
+    GLAPI GLAPIENTRY void bindAllAtomicCounterAsSSBO(void);
+    GLAPI GLAPIENTRY void restoreAtomicCounterAsSSBO(void);
+
     GLuint gen_array();
 
     GLboolean has_array(GLuint key);
@@ -89,6 +95,14 @@ extern "C"
     GLAPI GLAPIENTRY void glBufferStorage(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags);
 
     GLAPI GLAPIENTRY void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length);
+
+    GLAPI GLAPIENTRY void glClearBufferData(GLenum target, GLenum internalformat, GLenum format, GLenum type,
+                                            const void* data);
+
+    GLAPI GLAPIENTRY void glClearBufferSubData(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size,
+                                               GLenum format, GLenum type, const void* data);
+
+    GLAPI GLAPIENTRY void glGetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void* data);
 
     GLAPI GLAPIENTRY void glGenVertexArrays(GLsizei n, GLuint* arrays);
 

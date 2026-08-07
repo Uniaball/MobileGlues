@@ -470,7 +470,8 @@ STUB_FUNCTION_HEAD(void, glWindowPos3iv,const GLint* v); STUB_FUNCTION_END_NO_RE
 STUB_FUNCTION_HEAD(void, glWindowPos3s, GLshort x, GLshort y, GLshort z); STUB_FUNCTION_END_NO_RETURN(void, glWindowPos3s,x,y,z)
 STUB_FUNCTION_HEAD(void, glWindowPos3sv,const GLshort* v); STUB_FUNCTION_END_NO_RETURN(void, glWindowPos3sv,v)
 //STUB_FUNCTION_HEAD(void, glGetQueryObjectiv, GLuint id, GLenum pname, GLint* params); STUB_FUNCTION_END_NO_RETURN(void, glGetQueryObjectiv,id,pname,params)
-STUB_FUNCTION_HEAD(void, glGetBufferSubData, GLenum target, GLintptr offset, GLsizeiptr size, void* data); STUB_FUNCTION_END_NO_RETURN(void, glGetBufferSubData,target,offset,size,data)
+// implemented in gl/buffer.cpp
+//STUB_FUNCTION_HEAD(void, glGetBufferSubData, GLenum target, GLintptr offset, GLsizeiptr size, void* data); STUB_FUNCTION_END_NO_RETURN(void, glGetBufferSubData,target,offset,size,data)
 STUB_FUNCTION_HEAD(void, glGetVertexAttribdv, GLuint index, GLenum pname, GLdouble* params); STUB_FUNCTION_END_NO_RETURN(void, glGetVertexAttribdv,index,pname,params)
 STUB_FUNCTION_HEAD(void, glVertexAttrib1d, GLuint index, GLdouble x); STUB_FUNCTION_END_NO_RETURN(void, glVertexAttrib1d,index,x)
 STUB_FUNCTION_HEAD(void, glVertexAttrib1dv, GLuint index, const GLdouble* v); STUB_FUNCTION_END_NO_RETURN(void, glVertexAttrib1dv,index,v)
@@ -626,8 +627,10 @@ STUB_FUNCTION_HEAD(void, glGetDoublei_v, GLenum target, GLuint index, GLdouble* 
 STUB_FUNCTION_HEAD(void, glGetActiveAtomicCounterBufferiv, GLuint program, GLuint bufferIndex, GLenum pname, GLint* params); STUB_FUNCTION_END_NO_RETURN(void, glGetActiveAtomicCounterBufferiv,program,bufferIndex,pname,params)
 STUB_FUNCTION_HEAD(void, glDrawTransformFeedbackInstanced, GLenum mode, GLuint id, GLsizei instancecount); STUB_FUNCTION_END_NO_RETURN(void, glDrawTransformFeedbackInstanced,mode,id,instancecount)
 STUB_FUNCTION_HEAD(void, glDrawTransformFeedbackStreamInstanced, GLenum mode, GLuint id, GLuint stream, GLsizei instancecount); STUB_FUNCTION_END_NO_RETURN(void, glDrawTransformFeedbackStreamInstanced,mode,id,stream,instancecount)
-STUB_FUNCTION_HEAD(void, glClearBufferData, GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data); STUB_FUNCTION_END_NO_RETURN(void, glClearBufferData,target,internalformat,format,type,data)
-STUB_FUNCTION_HEAD(void, glClearBufferSubData, GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format, GLenum type, const void* data); STUB_FUNCTION_END_NO_RETURN(void, glClearBufferSubData,target,internalformat,offset,size,format,type,data)
+// implemented in gl/buffer.cpp
+//STUB_FUNCTION_HEAD(void, glClearBufferData, GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data); STUB_FUNCTION_END_NO_RETURN(void, glClearBufferData,target,internalformat,format,type,data)
+// implemented in gl/buffer.cpp
+//STUB_FUNCTION_HEAD(void, glClearBufferSubData, GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format, GLenum type, const void* data); STUB_FUNCTION_END_NO_RETURN(void, glClearBufferSubData,target,internalformat,offset,size,format,type,data)
 STUB_FUNCTION_HEAD(void, glGetInternalformati64v, GLenum target, GLenum internalformat, GLenum pname, GLsizei count, GLint64* params); STUB_FUNCTION_END_NO_RETURN(void, glGetInternalformati64v,target,internalformat,pname,count,params)
 STUB_FUNCTION_HEAD(void, glInvalidateTexSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth); STUB_FUNCTION_END_NO_RETURN(void, glInvalidateTexSubImage,texture,level,xoffset,yoffset,zoffset,width,height,depth)
 STUB_FUNCTION_HEAD(void, glInvalidateTexImage, GLuint texture, GLint level); STUB_FUNCTION_END_NO_RETURN(void, glInvalidateTexImage,texture,level)
