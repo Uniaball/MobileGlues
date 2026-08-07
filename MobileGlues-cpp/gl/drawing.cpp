@@ -158,7 +158,8 @@ void glDispatchCompute(GLuint num_groups_x, GLuint num_groups_y, GLuint num_grou
     LOG()
     LOG_D("glDispatchCompute, num_groups_x: %d, num_groups_y: %d, num_groups_z: %d", num_groups_x, num_groups_y,
           num_groups_z)
-    if (program_map_is_atomic_counter_emulated[gl_state->current_program]) {
+    if (program_map_is_atomic_counter_emulated[gl_state->current_program] &&
+        global_settings.ext_shader_atomic_counters) {
         bindAllAtomicCounterAsSSBO();
         LOG_D("Atomic counters bound as SSBOs for program %d", gl_state->current_program);
     } else {

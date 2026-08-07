@@ -519,7 +519,7 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
         CHECK_GL_ERROR
     }
     GLES.glBindBufferRange(target, index, real_buffer, offset, size);
-    if (target == GL_ATOMIC_COUNTER_BUFFER) {
+    if (target == GL_ATOMIC_COUNTER_BUFFER && global_settings.ext_shader_atomic_counters) {
         if (g_buffer_map_atomic_buffer_info.empty()) {
             g_buffer_map_atomic_buffer_info.resize(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, {});
         }

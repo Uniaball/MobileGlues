@@ -716,7 +716,11 @@ std::string preprocess_glsl(const std::string& glsl, GLenum shaderType, bool* at
         process_sampler_buffer(ret);
     }
 
-    *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
+    if (global_settings.ext_shader_atomic_counters) {
+        *atomicCounterEmulated = process_non_opaque_atomic_to_ssbo(ret);
+    } else {
+        *atomicCounterEmulated = false;
+    }
     return ret;
 }
 
