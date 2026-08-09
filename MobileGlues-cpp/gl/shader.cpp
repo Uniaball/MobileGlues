@@ -48,7 +48,7 @@ bool is_direct_shader(const char* glsl) {
     return es3_ability;
 }
 
-bool check_if_sampler_buffer_used(std::string str) {
+bool check_if_sampler_buffer_used(const std::string& str) {
     return str.find("samplerBuffer") != std::string::npos;
 }
 
@@ -117,7 +117,7 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
     }
 
     if (!essl_src.empty()) {
-        g_shaderInfos[shader].converted = essl_src;
+        info.converted = essl_src;
         const char* s[] = {essl_src.c_str()};
         GLES.glShaderSource(shader, count, s, nullptr);
         if (hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;

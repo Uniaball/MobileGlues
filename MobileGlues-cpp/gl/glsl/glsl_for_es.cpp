@@ -12,6 +12,7 @@
 #include "../log.h"
 #include "glslang/SPIRV/GlslangToSpv.h"
 #include <string>
+#include <string_view>
 #include <regex>
 #include <algorithm>
 #include <sstream>
@@ -345,8 +346,8 @@ std::string processOutColorLocations(const std::string& glslCode) {
     return std::regex_replace(glslCode, pattern, replacement);
 }
 
-bool checkIfAtomicCounterBufferEmulated(const std::string& glslCode) {
-    return glslCode.find(atomicCounterEmulatedWatermark) != std::string::npos;
+bool checkIfAtomicCounterBufferEmulated(std::string_view glslCode) {
+    return glslCode.find(atomicCounterEmulatedWatermark) != std::string_view::npos;
 }
 
 std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_version, uint glsl_version,
@@ -357,7 +358,7 @@ std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_vers
     const char* cachedESSL = Cache::get_instance().get(sha256_string.c_str(), sha256_string.size());
     if (cachedESSL) {
         LOG_D("GLSL Hit Cache:\n%s\n-->\n%s", glsl_code, cachedESSL)
-        return_code = checkIfAtomicCounterBufferEmulated(std::string(cachedESSL)) ? 1 : 0;
+        return_code = checkIfAtomicCounterBufferEmulated(cachedESSL) ? 1 : 0;
         return std::string(cachedESSL);
     }
 
