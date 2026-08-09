@@ -25,10 +25,7 @@
 #include "../glsl/glsl_for_es.h"
 #include "../log.h"
 #include "../mg.h"
-#include "../pixel.h"
 #include <GL/gl.h>
-#include <ankerl/unordered_dense.h>
-#include <glm/glm.hpp>
 
 namespace FSR1_Context {
     extern GLuint g_renderFBO;
@@ -58,8 +55,8 @@ namespace FSR1_Context {
     extern GLint g_uConst0Loc;
     extern GLint g_uViewportSizeLoc;
     extern bool g_uniformsDirty;
-    extern glm::vec4 g_lastConst0;
-    extern glm::vec2 g_lastViewportSize;
+    extern GLfloat g_lastConst0[4];
+    extern GLfloat g_lastViewportSize[2];
 
     // Cached viewport state — glViewport skipped when target dimensions match.
     extern GLsizei g_lastFsrViewportW;

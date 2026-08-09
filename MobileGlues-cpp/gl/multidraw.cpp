@@ -12,6 +12,7 @@
 #include "restart.h"
 #include "../egl/context.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -451,6 +452,106 @@ static bool mg_multidraw_restart_takeover(GLenum mode, const GLsizei* counts, GL
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Order-driven degradation
+//
+// Every "this backend cannot serve this call" branch below routes through one
+// of the md_fall_* helpers: the next rung is whatever the user ranked after the
+// failing backend for that entry point (config/settings.cpp,
+// global_settings.multidraw_order), not a hard-coded neighbour. The walk is
+// strictly forward through that order, so it terminates; the terminal rung for
+// the three list-taking entry points is the unrolled loop, which never falls.
+//
+// g_md_fallback_tick lets the in-process benchmark (multidraw_bench.cpp) detect
+// that a measured call was not actually served by the backend it was aimed at.
+// ---------------------------------------------------------------------------
+
+std::atomic<uint32_t> g_md_fallback_tick{0};
+
+static void md_call_elements(md_backend_t b, GLenum mode, const GLsizei* count, GLenum type,
+                             const void* const* indices, GLsizei primcount) {
+    switch (b) {
+    case md_backend_t::Indirect:
+        mg_glMultiDrawElements_indirect(mode, count, type, indices, primcount);
+        break;
+    case md_backend_t::MultiIndirect:
+        mg_glMultiDrawElements_multiindirect(mode, count, type, indices, primcount);
+        break;
+    case md_backend_t::MultiBaseVertex:
+        mg_glMultiDrawElements_multibasevertex(mode, count, type, indices, primcount);
+        break;
+    case md_backend_t::MultiArrays:
+        mg_glMultiDrawElements_multiarrays(mode, count, type, indices, primcount);
+        break;
+    default:
+        mg_glMultiDrawElements_drawelements(mode, count, type, indices, primcount);
+        break;
+    }
+}
+
+static void md_fall_elements(md_backend_t cur, GLenum mode, const GLsizei* count, GLenum type,
+                             const void* const* indices, GLsizei primcount) {
+    g_md_fallback_tick.fetch_add(1, std::memory_order_relaxed);
+    md_backend_t next = md_next_backend(md_entry_t::Elements, cur);
+    if (next == cur) next = md_backend_t::Unroll; // the last rung failed; the loop always works
+    md_call_elements(next, mode, count, type, indices, primcount);
+}
+
+static void md_call_elements_bv(md_backend_t b, GLenum mode, GLsizei* counts, GLenum type,
+                                const void* const* indices, GLsizei primcount, const GLint* basevertex) {
+    switch (b) {
+    case md_backend_t::Indirect:
+        mg_glMultiDrawElementsBaseVertex_indirect(mode, counts, type, indices, primcount, basevertex);
+        break;
+    case md_backend_t::BaseVertex:
+        mg_glMultiDrawElementsBaseVertex_basevertex(mode, counts, type, indices, primcount, basevertex);
+        break;
+    case md_backend_t::MultiIndirect:
+        mg_glMultiDrawElementsBaseVertex_multiindirect(mode, counts, type, indices, primcount, basevertex);
+        break;
+    case md_backend_t::MultiBaseVertex:
+        mg_glMultiDrawElementsBaseVertex_multibasevertex(mode, counts, type, indices, primcount, basevertex);
+        break;
+    case md_backend_t::Compute:
+        mg_glMultiDrawElementsBaseVertex_compute(mode, counts, type, indices, primcount, basevertex);
+        break;
+    default:
+        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        break;
+    }
+}
+
+static void md_fall_elements_bv(md_backend_t cur, GLenum mode, GLsizei* counts, GLenum type,
+                                const void* const* indices, GLsizei primcount, const GLint* basevertex) {
+    g_md_fallback_tick.fetch_add(1, std::memory_order_relaxed);
+    md_backend_t next = md_next_backend(md_entry_t::ElementsBaseVertex, cur);
+    if (next == cur) next = md_backend_t::Unroll;
+    md_call_elements_bv(next, mode, counts, type, indices, primcount, basevertex);
+}
+
+static void md_call_arrays(md_backend_t b, GLenum mode, const GLint* first, const GLsizei* count,
+                           GLsizei drawcount) {
+    switch (b) {
+    case md_backend_t::MultiArrays:
+        mg_glMultiDrawArrays_multiarrays(mode, first, count, drawcount);
+        break;
+    case md_backend_t::MultiIndirect:
+        mg_glMultiDrawArrays_multiindirect(mode, first, count, drawcount);
+        break;
+    default:
+        mg_glMultiDrawArrays_unroll(mode, first, count, drawcount);
+        break;
+    }
+}
+
+static void md_fall_arrays(md_backend_t cur, GLenum mode, const GLint* first, const GLsizei* count,
+                           GLsizei drawcount) {
+    g_md_fallback_tick.fetch_add(1, std::memory_order_relaxed);
+    md_backend_t next = md_next_backend(md_entry_t::Arrays, cur);
+    if (next == cur) next = md_backend_t::Unroll;
+    md_call_arrays(next, mode, first, count, drawcount);
+}
+
 static bool mg_validate_multidraw(const GLsizei* counts, GLenum type, GLsizei primcount) {
     if (primcount < 0) {
         MD_WARN_ONCE("multidraw: negative primcount %d", primcount);
@@ -607,14 +708,22 @@ static bool prepare_indirect_buffer(const GLsizei* counts, GLenum type, const vo
         g_cmdbufsize = static_cast<GLsizei>(sz);
     }
 
-    auto* pcmds = static_cast<draw_elements_indirect_command_t*>(GLES.glMapBufferRange(
-        GL_DRAW_INDIRECT_BUFFER, 0, static_cast<GLsizeiptr>(primcount * sizeof(draw_elements_indirect_command_t)),
-        GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
-    if (!pcmds) {
-        MD_WARN_ONCE("multidraw: failed to map indirect command buffer");
-        GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, prev);
-        return false;
-    }
+    // Built on the CPU and uploaded whole, rather than written through a
+    // GL_MAP_INVALIDATE_BUFFER_BIT mapping. The mapping says "all of this is
+    // about to be overwritten" more precisely, and on a driver that honours it
+    // there is nothing to choose between the two. What it costs is two ways to
+    // fail on every single draw call: a map that returns null, and an unmap that
+    // reports the contents lost. Both used to abandon the backend for the rest of
+    // the process, and falling back to unrolled draws forever is far more
+    // expensive than the upload that was being avoided -- a driver refusing to
+    // hand out a pointer for a buffer it is still reading is a perfectly ordinary
+    // thing, not a reason to give up on indirect drawing.
+    //
+    // thread_local for the same reason as mg_zero_basevertex: nothing in this
+    // file takes a lock, and two threads can each have a current context.
+    static thread_local std::vector<draw_elements_indirect_command_t> staged;
+    staged.resize(static_cast<size_t>(primcount));
+    draw_elements_indirect_command_t* pcmds = staged.data();
 
     for (GLsizei i = 0; i < primcount; ++i) {
         const uintptr_t byteOffset = reinterpret_cast<uintptr_t>(indices[i]);
@@ -630,11 +739,8 @@ static bool prepare_indirect_buffer(const GLsizei* counts, GLenum type, const vo
         pcmds[i].reservedMustBeZero = 0;
     }
 
-    if (GLES.glUnmapBuffer(GL_DRAW_INDIRECT_BUFFER) == GL_FALSE) {
-        MD_WARN_ONCE("multidraw: indirect command buffer contents lost on unmap");
-        GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, prev);
-        return false;
-    }
+    GLES.glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0,
+                         static_cast<GLsizeiptr>(primcount * sizeof(draw_elements_indirect_command_t)), pcmds);
     return true;
 }
 
@@ -714,8 +820,24 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
             }
             mg_rebase_indices_to_u32(rebased.data(), srcData, count, type, bv, restart_enabled, restart_value);
             GLES.glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
-        } else {
+        } else if (indices[i] != nullptr) {
             mg_rebase_indices_to_u32(rebased.data(), indices[i], count, type, bv, restart_enabled, restart_value);
+        } else {
+            // No element buffer bound and a null client pointer: there is nothing
+            // to read. GL leaves this undefined, and reading it is a segfault at
+            // address zero rather than a wrong picture -- which is what it was,
+            // reachable from the in-process benchmark the moment borrowing ANGLE
+            // started working, because a sub-draw's `indices` there is a buffer
+            // offset and offset zero is a null pointer.
+            //
+            // The binding is what decides which of the two `indices` means, so a
+            // zero binding with offset-shaped indices is a caller-side mistake
+            // this cannot repair. Say so once and skip: missing geometry beats a
+            // crash, and beats reading whatever happens to be at address zero.
+            MD_WARN_ONCE("multidraw drawelements: no element buffer bound and indices[%d] is null; "
+                         "sub-draw skipped",
+                         i);
+            continue;
         }
 
         GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_scratch_ibo);
@@ -765,9 +887,9 @@ void mg_glMultiDrawElementsBaseVertex_indirect(GLenum mode, GLsizei* counts, GLe
     if (mg_multidraw_restart_takeover(mode, counts, type, indices, primcount, basevertex)) return;
     md_restart_scope_t restart_scope(type);
 
-    if (!GLES.glDrawElementsIndirect || md_backend_disabled(md_backend_t::Indirect)) {
-        MD_WARN_ONCE("multidraw indirect: unavailable or disabled, falling back");
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+    if (!GLES.glDrawElementsIndirect) {
+        MD_WARN_ONCE("multidraw indirect: unavailable, falling back");
+        md_fall_elements_bv(md_backend_t::Indirect, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -775,7 +897,7 @@ void mg_glMultiDrawElementsBaseVertex_indirect(GLenum mode, GLsizei* counts, GLe
 
     GLuint prevIndirectBuffer = 0;
     if (!prepare_indirect_buffer(counts, type, indices, primcount, basevertex, &prevIndirectBuffer)) {
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Indirect, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -798,9 +920,9 @@ void mg_glMultiDrawElements_indirect(GLenum mode, const GLsizei* count, GLenum t
     if (mg_multidraw_restart_takeover(mode, count, type, indices, primcount, nullptr)) return;
     md_restart_scope_t restart_scope(type);
 
-    if (!GLES.glDrawElementsIndirect || md_backend_disabled(md_backend_t::Indirect)) {
-        MD_WARN_ONCE("multidraw indirect: unavailable or disabled, falling back");
-        mg_glMultiDrawElements_drawelements(mode, count, type, indices, primcount);
+    if (!GLES.glDrawElementsIndirect) {
+        MD_WARN_ONCE("multidraw indirect: unavailable, falling back");
+        md_fall_elements(md_backend_t::Indirect, mode, count, type, indices, primcount);
         return;
     }
 
@@ -808,7 +930,7 @@ void mg_glMultiDrawElements_indirect(GLenum mode, const GLsizei* count, GLenum t
 
     GLuint prevIndirectBuffer = 0;
     if (!prepare_indirect_buffer(count, type, indices, primcount, nullptr, &prevIndirectBuffer)) {
-        mg_glMultiDrawElements_drawelements(mode, count, type, indices, primcount);
+        md_fall_elements(md_backend_t::Indirect, mode, count, type, indices, primcount);
         return;
     }
 
@@ -838,12 +960,10 @@ void mg_glMultiDrawElementsBaseVertex_multiindirect(GLenum mode, GLsizei* counts
     // Same pair of conditions resolution used (config/settings.cpp): the
     // extension string as well as the entry point. This function is also reached
     // as a fallback from the batched backends, so it cannot assume resolution
-    // already vetted it. The disable mask has to be honoured here too -- the
-    // whole point of the key is to keep a backend out of the driver's hands.
-    if (!GLES.glMultiDrawElementsIndirectEXT || !g_gles_caps.GL_EXT_multi_draw_indirect ||
-        md_backend_disabled(md_backend_t::MultiIndirect)) {
-        MD_WARN_ONCE("multidraw multiindirect: unavailable or disabled, falling back");
-        mg_glMultiDrawElementsBaseVertex_indirect(mode, counts, type, indices, primcount, basevertex);
+    // already vetted it.
+    if (!GLES.glMultiDrawElementsIndirectEXT || !g_gles_caps.GL_EXT_multi_draw_indirect) {
+        MD_WARN_ONCE("multidraw multiindirect: unavailable, falling back");
+        md_fall_elements_bv(md_backend_t::MultiIndirect, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -851,7 +971,7 @@ void mg_glMultiDrawElementsBaseVertex_multiindirect(GLenum mode, GLsizei* counts
 
     GLuint prevIndirectBuffer = 0;
     if (!prepare_indirect_buffer(counts, type, indices, primcount, basevertex, &prevIndirectBuffer)) {
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::MultiIndirect, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -870,10 +990,9 @@ void mg_glMultiDrawElements_multiindirect(GLenum mode, const GLsizei* count, GLe
     if (mg_multidraw_restart_takeover(mode, count, type, indices, primcount, nullptr)) return;
     md_restart_scope_t restart_scope(type);
 
-    if (!GLES.glMultiDrawElementsIndirectEXT || !g_gles_caps.GL_EXT_multi_draw_indirect ||
-        md_backend_disabled(md_backend_t::MultiIndirect)) {
-        MD_WARN_ONCE("multidraw multiindirect: unavailable or disabled, falling back");
-        mg_glMultiDrawElements_indirect(mode, count, type, indices, primcount);
+    if (!GLES.glMultiDrawElementsIndirectEXT || !g_gles_caps.GL_EXT_multi_draw_indirect) {
+        MD_WARN_ONCE("multidraw multiindirect: unavailable, falling back");
+        md_fall_elements(md_backend_t::MultiIndirect, mode, count, type, indices, primcount);
         return;
     }
 
@@ -881,7 +1000,7 @@ void mg_glMultiDrawElements_multiindirect(GLenum mode, const GLsizei* count, GLe
 
     GLuint prevIndirectBuffer = 0;
     if (!prepare_indirect_buffer(count, type, indices, primcount, nullptr, &prevIndirectBuffer)) {
-        mg_glMultiDrawElements_drawelements(mode, count, type, indices, primcount);
+        md_fall_elements(md_backend_t::MultiIndirect, mode, count, type, indices, primcount);
         return;
     }
 
@@ -904,9 +1023,9 @@ void mg_glMultiDrawElementsBaseVertex_basevertex(GLenum mode, GLsizei* counts, G
     if (mg_multidraw_restart_takeover(mode, counts, type, indices, primcount, basevertex)) return;
     md_restart_scope_t restart_scope(type);
 
-    if (!GLES.glDrawElementsBaseVertex || md_backend_disabled(md_backend_t::BaseVertex)) {
-        MD_WARN_ONCE("multidraw basevertex: unavailable or disabled, falling back");
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+    if (!GLES.glDrawElementsBaseVertex) {
+        MD_WARN_ONCE("multidraw basevertex: unavailable, falling back");
+        md_fall_elements_bv(md_backend_t::BaseVertex, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1003,13 +1122,11 @@ void mg_glMultiDrawElementsBaseVertex_multibasevertex(GLenum mode, GLsizei* coun
     multidraw_check_context();
 
     // Hand over before doing any work once this backend is known to be unusable,
-    // otherwise every later call would validate and prepare the batch twice.
-    // MultidrawIndirect is the next rung down in init_settings_post's ladder, and
-    // it still folds the batch into one driver call; going straight to the
-    // unrolled loop threw that away.
-    if (g_mdbv_state == md_probe_state_t::Failed || !mg_multi_draw_elements_basevertex_ext_available() ||
-        md_backend_disabled(md_backend_t::MultiBaseVertex)) {
-        mg_glMultiDrawElementsBaseVertex_multiindirect(mode, counts, type, indices, primcount, basevertex);
+    // otherwise every later call would validate and prepare the batch twice. The
+    // next rung comes from the user's order, so the degradation lands on
+    // whatever they ranked directly below this backend.
+    if (g_mdbv_state == md_probe_state_t::Failed || !mg_multi_draw_elements_basevertex_ext_available()) {
+        md_fall_elements_bv(md_backend_t::MultiBaseVertex, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1022,7 +1139,7 @@ void mg_glMultiDrawElementsBaseVertex_multibasevertex(GLenum mode, GLsizei* coun
 
     if (!mg_multi_draw_basevertex(mode, counts, type, indices, primcount, basevertex)) {
         // Only reachable on the single call whose probe failed.
-        mg_glMultiDrawElementsBaseVertex_multiindirect(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::MultiBaseVertex, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1043,9 +1160,8 @@ void mg_glMultiDrawElements_multiarrays(GLenum mode, const GLsizei* count, GLenu
     LOG()
     multidraw_check_context();
 
-    if (g_mda_state == md_probe_state_t::Failed || !g_mde_ext ||
-        md_backend_disabled(md_backend_t::MultiArrays)) {
-        mg_glMultiDrawElements_multiindirect(mode, count, type, indices, primcount);
+    if (g_mda_state == md_probe_state_t::Failed || !g_mde_ext) {
+        md_fall_elements(md_backend_t::MultiArrays, mode, count, type, indices, primcount);
         return;
     }
 
@@ -1066,7 +1182,7 @@ void mg_glMultiDrawElements_multiarrays(GLenum mode, const GLsizei* count, GLenu
         if (err != GL_NO_ERROR) {
             MD_WARN_ONCE("multidraw multiarrays: glMultiDrawElementsEXT failed with 0x%04x, disabling it", err);
             g_mda_state = md_probe_state_t::Failed;
-            mg_glMultiDrawElements_multiindirect(mode, count, type, indices, primcount);
+            md_fall_elements(md_backend_t::MultiArrays, mode, count, type, indices, primcount);
             return;
         }
         g_mda_state = md_probe_state_t::Working;
@@ -1081,9 +1197,8 @@ void mg_glMultiDrawElements_multibasevertex(GLenum mode, const GLsizei* count, G
     // The latch read just below is per-context, so re-arm it first.
     multidraw_check_context();
 
-    if (g_mdbv_state == md_probe_state_t::Failed || !mg_multi_draw_elements_basevertex_ext_available() ||
-        md_backend_disabled(md_backend_t::MultiBaseVertex)) {
-        mg_glMultiDrawElements_multiindirect(mode, count, type, indices, primcount);
+    if (g_mdbv_state == md_probe_state_t::Failed || !mg_multi_draw_elements_basevertex_ext_available()) {
+        md_fall_elements(md_backend_t::MultiBaseVertex, mode, count, type, indices, primcount);
         return;
     }
 
@@ -1095,15 +1210,13 @@ void mg_glMultiDrawElements_multibasevertex(GLenum mode, const GLsizei* count, G
     prepareForDraw();
 
     // glMultiDrawElements is glMultiDrawElementsBaseVertex with an all-zero base
-    // vertex array, so this entry point gets the same single driver call. Running
-    // the unrolled loop here instead would have made Auto slower than the
-    // MultiDrawIndirect path it replaced.
+    // vertex array, so this entry point gets the same single driver call.
     if (mg_multi_draw_basevertex(mode, count, type, indices, primcount, nullptr)) {
         CHECK_GL_ERROR
         return;
     }
 
-    mg_glMultiDrawElements_multiindirect(mode, count, type, indices, primcount);
+    md_fall_elements(md_backend_t::MultiBaseVertex, mode, count, type, indices, primcount);
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,7 +1343,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     // Latched: without this a context that cannot compile the program used to
     // re-run glCreateShader/glCompileShader/glLinkProgram on every single call.
     if (g_compute_failed) {
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1238,7 +1351,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
 
     if (is_strip_like_mode(mode)) {
         LOG_D("multidraw compute: strip/loop mode, fallback")
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1252,13 +1365,13 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         // Unknown or non-separable mode (GL_PATCHES, anything new): fusing is not
         // provably safe, so do not.
         MD_WARN_ONCE("multidraw compute: mode 0x%04x cannot be fused safely, falling back", mode);
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
     for (GLsizei i = 0; i < primcount; ++i) {
         if (counts[i] % verts_per_prim != 0) {
             MD_WARN_ONCE("multidraw compute: sub-draw count is not a whole number of primitives, falling back");
-            mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+            md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
             return;
         }
     }
@@ -1268,7 +1381,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     // baseVertex, silently disabling restart. The CPU path handles sentinels.
     if (mg_primitive_restart_enabled()) {
         LOG_D("multidraw compute: primitive restart enabled, fallback")
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1299,7 +1412,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
             g_drawcmd_ssbo = 0;
             g_outputibo = 0;
             g_compute_failed = true;
-            mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+            md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
             return;
         }
 
@@ -1315,19 +1428,19 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &ibo);
     if (ibo == 0) {
         LOG_D("multidraw compute: no element array buffer bound, fallback")
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
     GLint ibo_size = 0;
     GLES.glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &ibo_size);
     if (ibo_size <= 0) {
         MD_WARN_ONCE("multidraw compute: invalid index buffer size, falling back");
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
     if (elementSize < 4 && (ibo_size % 4) != 0) {
         MD_WARN_ONCE("multidraw compute: index buffer size is not 4-byte aligned, falling back");
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1346,7 +1459,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         running += static_cast<uint64_t>(c);
         if (running > max_total) {
             MD_WARN_ONCE("multidraw compute: fused index count exceeds the dispatch limit, falling back");
-            mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+            md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
             return;
         }
         prefix_sum[i] = static_cast<GLuint>(running);
@@ -1364,19 +1477,19 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
                 // Truncating the division here would shift the whole sub-draw onto
                 // the wrong indices, which looks plausible but is wrong.
                 MD_WARN_ONCE("multidraw compute: misaligned index offset, falling back");
-                mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+                md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
                 return;
             }
             const uint64_t byteEnd = byteOffset + static_cast<uint64_t>(c) * elementSize;
             if (byteEnd > static_cast<uint64_t>(ibo_size)) {
                 MD_WARN_ONCE("multidraw compute: index range out of bounds, falling back");
-                mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+                md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
                 return;
             }
             const uint64_t elementOffset = byteOffset / elementSize;
             if (elementOffset > static_cast<uint64_t>(std::numeric_limits<GLint>::max())) {
                 MD_WARN_ONCE("multidraw compute: index offset overflow, falling back");
-                mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+                md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
                 return;
             }
             drawcmds[i].firstIndex = static_cast<GLuint>(elementOffset);
@@ -1412,7 +1525,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         !upload_ssbo(g_prefixsumbuffer, sizeof(GLuint) * static_cast<size_t>(primcount), prefix_sum.data(),
                      "prefix sum buffer")) {
         GLES.glBindBuffer(GL_SHADER_STORAGE_BUFFER, prev_ssbo_binding);
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1434,7 +1547,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         MD_WARN_ONCE("multidraw compute: output buffer allocation failed (wanted %zu bytes, got %d), falling back",
                      output_bytes, output_size);
         GLES.glBindBuffer(GL_SHADER_STORAGE_BUFFER, prev_ssbo_binding);
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1487,7 +1600,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         MD_WARN_ONCE("multidraw compute: work group count exceeds the limit, falling back");
         restore_ssbo_bindings();
         GLES.glUseProgram(static_cast<GLuint>(prev_program));
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1506,7 +1619,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         // drawing from it would render garbage rather than nothing.
         restore_ssbo_bindings();
         GLES.glUseProgram(static_cast<GLuint>(prev_program));
-        mg_glMultiDrawElementsBaseVertex_drawelements(mode, counts, type, indices, primcount, basevertex);
+        md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
         return;
     }
 
@@ -1601,9 +1714,8 @@ void mg_glMultiDrawArrays_multiarrays(GLenum mode, const GLint* first, const GLs
     // The latch below is per-context, so it has to be re-armed before it is read.
     multidraw_check_context();
 
-    if (g_arrays_mda_state == md_probe_state_t::Failed || !g_mda_ext ||
-        md_backend_disabled(md_backend_t::MultiArrays)) {
-        mg_glMultiDrawArrays_multiindirect(mode, first, count, drawcount);
+    if (g_arrays_mda_state == md_probe_state_t::Failed || !g_mda_ext) {
+        md_fall_arrays(md_backend_t::MultiArrays, mode, first, count, drawcount);
         return;
     }
     if (!mg_validate_multidraw_arrays(first, count, drawcount)) return;
@@ -1620,7 +1732,7 @@ void mg_glMultiDrawArrays_multiarrays(GLenum mode, const GLint* first, const GLs
         if (err != GL_NO_ERROR) {
             MD_WARN_ONCE("multidraw multiarrays: glMultiDrawArraysEXT failed with 0x%04x, disabling it", err);
             g_arrays_mda_state = md_probe_state_t::Failed;
-            mg_glMultiDrawArrays_multiindirect(mode, first, count, drawcount);
+            md_fall_arrays(md_backend_t::MultiArrays, mode, first, count, drawcount);
             return;
         }
         g_arrays_mda_state = md_probe_state_t::Working;
@@ -1692,33 +1804,33 @@ void mg_glMultiDrawArrays_multiindirect(GLenum mode, const GLint* first, const G
     LOG()
     multidraw_check_context();
 
-    if (g_arrays_mdi_state == md_probe_state_t::Failed || !GLES.glMultiDrawArraysIndirectEXT ||
-        md_backend_disabled(md_backend_t::MultiIndirect)) {
-        mg_glMultiDrawArrays_unroll(mode, first, count, drawcount);
+    if (g_arrays_mdi_state == md_probe_state_t::Failed || !GLES.glMultiDrawArraysIndirectEXT) {
+        md_fall_arrays(md_backend_t::MultiIndirect, mode, first, count, drawcount);
         return;
     }
     if (!mg_validate_multidraw_arrays(first, count, drawcount)) return;
 
     // GLES requires a vertex array object for an indirect draw, and requires
-    // every enabled array to be buffer-backed. The unrolled loop is legal with
-    // VAO 0, so this check decides between them rather than reporting an error.
+    // every enabled array to be buffer-backed. The next rung in the user's order
+    // (multiarrays or the unrolled loop) is legal with VAO 0, so this check
+    // decides between them rather than reporting an error.
     GLint vao = 0;
     GLES.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
     if (vao == 0) {
-        LOG_D("multidraw arrays: no vertex array object bound, unrolling")
-        mg_glMultiDrawArrays_unroll(mode, first, count, drawcount);
+        LOG_D("multidraw arrays: no vertex array object bound, falling back")
+        md_fall_arrays(md_backend_t::MultiIndirect, mode, first, count, drawcount);
         return;
     }
 
     // Indirect draws are not allowed while transform feedback is active and not
-    // paused; the unrolled loop is.
+    // paused; the other backends are.
     {
         GLint tf_active = 0, tf_paused = 0;
         GLES.glGetIntegerv(GL_TRANSFORM_FEEDBACK_ACTIVE, &tf_active);
         GLES.glGetIntegerv(GL_TRANSFORM_FEEDBACK_PAUSED, &tf_paused);
         if (tf_active && !tf_paused) {
-            LOG_D("multidraw arrays: transform feedback active, unrolling")
-            mg_glMultiDrawArrays_unroll(mode, first, count, drawcount);
+            LOG_D("multidraw arrays: transform feedback active, falling back")
+            md_fall_arrays(md_backend_t::MultiIndirect, mode, first, count, drawcount);
             return;
         }
     }
@@ -1727,7 +1839,7 @@ void mg_glMultiDrawArrays_multiindirect(GLenum mode, const GLint* first, const G
 
     GLuint prev_indirect = 0;
     if (!prepare_arrays_indirect_buffer(first, count, drawcount, &prev_indirect)) {
-        mg_glMultiDrawArrays_unroll(mode, first, count, drawcount);
+        md_fall_arrays(md_backend_t::MultiIndirect, mode, first, count, drawcount);
         return;
     }
 
@@ -1742,7 +1854,7 @@ void mg_glMultiDrawArrays_multiindirect(GLenum mode, const GLint* first, const G
             MD_WARN_ONCE("multidraw arrays: glMultiDrawArraysIndirectEXT failed with 0x%04x, disabling", err);
             g_arrays_mdi_state = md_probe_state_t::Failed;
             GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, prev_indirect);
-            mg_glMultiDrawArrays_unroll(mode, first, count, drawcount);
+            md_fall_arrays(md_backend_t::MultiIndirect, mode, first, count, drawcount);
             return;
         }
         g_arrays_mdi_state = md_probe_state_t::Working;

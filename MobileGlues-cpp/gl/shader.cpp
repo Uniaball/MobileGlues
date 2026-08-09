@@ -54,9 +54,10 @@ bool check_if_sampler_buffer_used(std::string str) {
 
 void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length) {
     LOG()
-    g_shaderInfos[shader].converted.clear();
-    g_shaderInfos[shader].frag_data_changed_converted.clear();
-    g_shaderInfos[shader].frag_data_changed = 0;
+    ShaderInfo& info = g_shaderInfos[shader];
+    info.converted.clear();
+    info.frag_data_changed_converted.clear();
+    info.frag_data_changed = 0;
 
     size_t l = 0;
     for (int i = 0; i < count; i++) l += (length && length[i] >= 0) ? length[i] : strlen(string[i]);

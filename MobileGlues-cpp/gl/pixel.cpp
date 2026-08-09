@@ -11,10 +11,28 @@
 
 #define DEBUG 0
 
+// Three tables that have to agree, and used to be shuffled together.
+//
+// gl_sizeof is keyed on the pixel-transfer TYPE and answers bytes -- per
+// component for an unpacked type, per whole pixel for a packed one.
+// pixel_sizeof is keyed on the FORMAT and answers components per pixel.
+// is_type_packed says which of the two readings applies.
+//
+// Format enums had leaked into the type table (GL_LUMINANCE_ALPHA, GL_ALPHA,
+// GL_DEPTH_COMPONENT, GL_COLOR_INDEX), sized internalformats and a texgen
+// coordinate had leaked into the format table (GL_RGB8, GL_RGBA8, GL_R32F,
+// GL_R11F_G11F_B10F, GL_R), and a format sat in the packed-type list
+// (GL_DEPTH_STENCIL) while the actual packed type it stands for
+// (GL_UNSIGNED_INT_24_8) was missing from it. Most of that was unreachable
+// through the one caller, but GL_R32F with GL_FLOAT really did answer 16 bytes
+// for a 4-byte texel, and every entry that was merely latent was a trap for the
+// next caller. Each table now holds only its own kind of enum.
+
 GLsizei gl_sizeof(GLenum type) {
-    // types
     switch (type) {
     case GL_DOUBLE:
+    // One 64-bit unit per pixel: 32-bit float depth plus a padded stencil byte.
+    case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
         return 8;
     case GL_FLOAT:
     case GL_INT:
@@ -24,11 +42,15 @@ GLsizei gl_sizeof(GLenum type) {
     case GL_UNSIGNED_INT_8_8_8_8:
     case GL_UNSIGNED_INT_8_8_8_8_REV:
     case GL_UNSIGNED_INT_24_8:
+    // GL 3.0 packed float formats. Their absence made pixel_sizeof answer 0 for
+    // any R11F_G11F_B10F or RGB9_E5 transfer, which the DSA readback path reads
+    // as "unsupported" and drops.
+    case GL_UNSIGNED_INT_10F_11F_11F_REV:
+    case GL_UNSIGNED_INT_5_9_9_9_REV:
     case GL_4_BYTES:
         return 4;
     case GL_3_BYTES:
         return 3;
-    case GL_LUMINANCE_ALPHA:
     case GL_SHORT:
     case GL_HALF_FLOAT:
     case GL_UNSIGNED_SHORT:
@@ -40,14 +62,10 @@ GLsizei gl_sizeof(GLenum type) {
     case GL_UNSIGNED_SHORT_5_6_5_REV:
     case GL_2_BYTES:
         return 2;
-    case GL_ALPHA:
-    case GL_LUMINANCE:
     case GL_BYTE:
     case GL_UNSIGNED_BYTE:
     case GL_UNSIGNED_BYTE_2_3_3_REV:
     case GL_UNSIGNED_BYTE_3_3_2:
-    case GL_DEPTH_COMPONENT:
-    case GL_COLOR_INDEX:
         return 1;
     default:
         LOG_D("Unsupported pixel data type: %s\n", glEnumToString(type))
@@ -66,13 +84,19 @@ GLboolean is_type_packed(GLenum type) {
     case GL_UNSIGNED_INT_2_10_10_10_REV:
     case GL_UNSIGNED_INT_8_8_8_8:
     case GL_UNSIGNED_INT_8_8_8_8_REV:
+    // The packed depth-stencil TYPE. GL_DEPTH_STENCIL, the FORMAT, used to stand
+    // here in its place; the result stayed right only because that format is
+    // independently one component wide, so the collapse below never had to fire.
+    case GL_UNSIGNED_INT_24_8:
+    case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
+    case GL_UNSIGNED_INT_10F_11F_11F_REV:
+    case GL_UNSIGNED_INT_5_9_9_9_REV:
     case GL_UNSIGNED_SHORT_1_5_5_5_REV:
     case GL_UNSIGNED_SHORT_4_4_4_4:
     case GL_UNSIGNED_SHORT_4_4_4_4_REV:
     case GL_UNSIGNED_SHORT_5_5_5_1:
     case GL_UNSIGNED_SHORT_5_6_5:
     case GL_UNSIGNED_SHORT_5_6_5_REV:
-    case GL_DEPTH_STENCIL:
         return true;
     default:
         return false;
@@ -82,29 +106,39 @@ GLboolean is_type_packed(GLenum type) {
 GLsizei pixel_sizeof(GLenum format, GLenum type) {
     GLsizei width = 0;
     switch (format) {
-    case GL_R:
     case GL_RED:
+    case GL_GREEN:
+    case GL_BLUE:
     case GL_ALPHA:
     case GL_LUMINANCE:
     case GL_DEPTH_COMPONENT:
     case GL_DEPTH_STENCIL:
+    case GL_STENCIL_INDEX:
     case GL_COLOR_INDEX:
+    // The integer client formats. Every one of them was missing, so reading back
+    // any integer texture -- an id or picking buffer, a voxel lookup -- sized to
+    // zero and was dropped without an error.
+    case GL_RED_INTEGER:
+    case GL_GREEN_INTEGER:
+    case GL_BLUE_INTEGER:
+    case GL_ALPHA_INTEGER:
         width = 1;
         break;
     case GL_RG:
     case GL_LUMINANCE_ALPHA:
+    case GL_RG_INTEGER:
         width = 2;
         break;
     case GL_RGB:
     case GL_BGR:
-    case GL_RGB8:
+    case GL_RGB_INTEGER:
+    case GL_BGR_INTEGER:
         width = 3;
         break;
     case GL_RGBA:
     case GL_BGRA:
-    case GL_RGBA8:
-    case GL_R11F_G11F_B10F:
-    case GL_R32F:
+    case GL_RGBA_INTEGER:
+    case GL_BGRA_INTEGER:
         width = 4;
         break;
     default:
@@ -112,465 +146,75 @@ GLsizei pixel_sizeof(GLenum format, GLenum type) {
         return 0;
     }
 
+    // A packed type carries the whole pixel in one unit, so the component count
+    // stops applying.
     if (is_type_packed(type)) width = 1;
 
     return width * gl_sizeof(type);
 }
 
-static const colorlayout_t* get_color_map(GLenum format) {
-#define map(fmt, ...)                                                                                                  \
-    case fmt: {                                                                                                        \
-        static colorlayout_t layout = {fmt, __VA_ARGS__};                                                              \
-        return &layout;                                                                                                \
+// ---------------------------------------------------------------------------
+// The pixel-store parameters GLES does not have
+// ---------------------------------------------------------------------------
+
+namespace {
+// Where each of the six lives in the per-context record, or nullptr for a pname
+// that is not one of them.
+GLint* desktop_pixel_store_slot(GLenum pname) {
+    if (gl_state == nullptr) return nullptr;
+    switch (pname) {
+    case GL_UNPACK_SWAP_BYTES:
+        return &gl_state->unpack_swap_bytes;
+    case GL_UNPACK_LSB_FIRST:
+        return &gl_state->unpack_lsb_first;
+    case GL_PACK_SWAP_BYTES:
+        return &gl_state->pack_swap_bytes;
+    case GL_PACK_LSB_FIRST:
+        return &gl_state->pack_lsb_first;
+    case GL_PACK_IMAGE_HEIGHT:
+        return &gl_state->pack_image_height;
+    case GL_PACK_SKIP_IMAGES:
+        return &gl_state->pack_skip_images;
+    default:
+        return nullptr;
     }
-    switch (format) {
-        map(GL_RED, 0, -1, -1, -1, 0) map(GL_R, 0, -1, -1, -1, 0) map(GL_RG, 0, 1, -1, -1, 0)
-            map(GL_RGBA, 0, 1, 2, 3, 3) map(GL_RGB, 0, 1, 2, -1, 2) map(GL_BGRA, 2, 1, 0, 3, 3)
-                map(GL_BGR, 2, 1, 0, -1, 2) map(GL_LUMINANCE_ALPHA, 0, 0, 0, 1, 1) map(GL_LUMINANCE, 0, 0, 0, -1, 0)
-                    map(GL_ALPHA, -1, -1, -1, 0, 0) map(GL_DEPTH_COMPONENT, 0, -1, -1, -1, 0)
-                        map(GL_COLOR_INDEX, 0, 1, 2, 3, 3) default
-            : LOG_D("get_color_map: unknown pixel format %s\n", glEnumToString(format)) break;
-    }
-    static colorlayout_t null = {0};
-    return &null;
-#undef map
 }
+} // namespace
 
-bool pixel_convert(const GLvoid* src, GLvoid** dst, GLuint width, GLuint height, GLenum src_format, GLenum src_type,
-                   GLenum dst_format, GLenum dst_type, GLuint stride, GLuint align) {
-    const colorlayout_t *src_color, *dst_color;
-    GLuint pixels = width * height;
-    if (src_type == GL_INT8_REV) src_type = GL_UNSIGNED_BYTE;
-    if (dst_type == GL_INT8_REV) dst_type = GL_UNSIGNED_BYTE;
-    GLuint dst_size = height * widthalign(width * pixel_sizeof(dst_format, dst_type), align);
-    GLuint dst_width2 = widthalign((stride ? stride : width) * pixel_sizeof(dst_format, dst_type), align);
-    GLuint dst_width = dst_width2 - (width * pixel_sizeof(dst_format, dst_type));
-    GLuint src_width = widthalign(width * pixel_sizeof(src_format, src_type), align);
-    GLuint src_widthadj = src_width - (width * pixel_sizeof(src_format, src_type));
-
-    // printf("pixel conversion: %ix%i - %s, %s (%d) ==> %s, %s (%d),
-    // transform=%i, align=%d, src_width=%d(%d), dst_width=%d(%d)\n", width,
-    // height, PrintEnum(src_format), PrintEnum(src_type),pixel_sizeof(src_format,
-    // src_type), PrintEnum(dst_format), PrintEnum(dst_type),
-    // pixel_sizeof(dst_format, dst_type), raster_need_transform(), align,
-    // src_width, src_widthadj, dst_width2, dst_width);
-
-    if ((src_type == dst_type) && (dst_format == src_format)) {
-        if (*dst == src) return true;
-        if (!dst_size || !pixel_sizeof(src_format, src_type)) {
-            LOG_D("pixel_convert: pixel conversion, unknown format size, anticipated "
-                  "abort\n")
-            return false;
+bool mg_pixel_store_set(GLenum pname, GLint param) {
+    GLint* slot = desktop_pixel_store_slot(pname);
+    if (slot == nullptr) return false;
+    // The booleans store as 0 or 1, the two counts as themselves. GL rejects a
+    // negative count; the driver would have said so, and nothing here can.
+    switch (pname) {
+    case GL_PACK_IMAGE_HEIGHT:
+    case GL_PACK_SKIP_IMAGES:
+        if (param < 0) {
+            mg_set_gl_error(GL_INVALID_VALUE);
+            return true;
         }
-        if (*dst == nullptr) // alloc dst only if dst==NULL
-            *dst = malloc(dst_size);
-        if (stride) // for in-place conversion
-            for (int yy = 0; yy < height; yy++)
-                memcpy((char*)(*dst) + yy * dst_width2, (char*)src + yy * src_width, src_width);
-        else
-            memcpy(*dst, src, dst_size);
-        return true;
-    }
-    src_color = get_color_map(src_format);
-    dst_color = get_color_map(dst_format);
-    if (!dst_size || !pixel_sizeof(src_format, src_type) || !src_color->type || !dst_color->type) {
-        LOG_D("pixel_convert: pixel conversion, anticipated abort\n")
-        return false;
-    }
-    GLsizei src_stride = pixel_sizeof(src_format, src_type);
-    GLsizei dst_stride = pixel_sizeof(dst_format, dst_type);
-    if (*dst == src || *dst == nullptr) *dst = malloc(dst_size);
-    uintptr_t src_pos = widthalign((uintptr_t)src, align);
-    uintptr_t dst_pos = widthalign((uintptr_t)*dst, align);
-    // fast optimized loop for common conversion cases first...
-    // TODO: Rewrite that with some Macro, it's obviously doable to simplify the
-    // reading (and writing) of all this simple BGRA <-> RGBA / UNSIGNED_BYTE
-    if ((((src_format == GL_BGRA) && (dst_format == GL_RGBA)) ||
-         ((src_format == GL_RGBA) && (dst_format == GL_BGRA))) &&
-        (dst_type == GL_UNSIGNED_BYTE) && ((src_type == GL_UNSIGNED_BYTE))) {
-        GLuint tmp;
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                tmp = *(const GLuint*)src_pos;
-#ifdef __BIG_ENDIAN__
-                *(GLuint*)dst_pos = (tmp & 0x00ff00ff) | ((tmp & 0x0000ff00) << 16) | ((tmp & 0xff000000) >> 16);
-#else
-                *(GLuint*)dst_pos = (tmp & 0xff00ff00) | ((tmp & 0x00ff0000) >> 16) | ((tmp & 0x000000ff) << 16);
-#endif
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGBA or BGRA with GL_INT_8_8_8_8 <-> GL_INT_8_8_8_8_REV
-    if ((src_format == dst_format) && (src_format == GL_RGBA || src_format == GL_BGRA) &&
-        ((src_type == GL_INT8 && dst_type == GL_INT8_REV) || (src_type == GL_INT8_REV && dst_type == GL_INT8))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                ((char*)dst_pos)[0] = ((char*)src_pos)[3];
-                ((char*)dst_pos)[1] = ((char*)src_pos)[2];
-                ((char*)dst_pos)[2] = ((char*)src_pos)[1];
-                ((char*)dst_pos)[3] = ((char*)src_pos)[0];
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-#ifdef __BIG_ENDIAN__
-    // RGBA or BGRA with GL_UNSIGNED_INT_8_8_8_8_REV <-> GL_UNSIGNED_BYTE
-    if ((src_format == dst_format) && (src_format == GL_RGBA || src_format == GL_BGRA) &&
-        ((src_type == GL_UNSIGNED_INT_8_8_8_8_REV && dst_type == GL_UNSIGNED_BYTE) ||
-         (src_type == GL_UNSIGNED_BYTE && dst_type == GL_UNSIGNED_INT_8_8_8_8_REV))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                ((char*)dst_pos)[0] = ((char*)src_pos)[3];
-                ((char*)dst_pos)[1] = ((char*)src_pos)[2];
-                ((char*)dst_pos)[2] = ((char*)src_pos)[1];
-                ((char*)dst_pos)[3] = ((char*)src_pos)[0];
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-#endif
-    // BGRA1555 -> RGBA5551
-    if ((src_format == GL_BGRA) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_SHORT_5_5_5_1) &&
-        (src_type == GL_UNSIGNED_SHORT_1_5_5_5_REV)) {
-        GLushort tmp;
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                // invert 1555/BGRA to 5551/RGBA (0x1f / 0x3e0 / 7c00)
-                tmp = *(GLushort*)src_pos;
-                *(GLushort*)dst_pos = ((tmp & 0x8000) >> 15) | ((tmp & 0x7fff) << 1);
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // L -> RGBA
-    if ((src_format == GL_LUMINANCE) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_BYTE) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                // tmp = *(const GLuint*)src_pos;
-                auto* byte_dst = (unsigned char*)dst_pos;
-#ifdef __BIG_ENDIAN__
-                byte_dst[1] = byte_dst[2] = byte_dst[3] = *(GLubyte*)src_pos;
-                byte_dst[0] = 255;
-#else
-                byte_dst[0] = byte_dst[1] = byte_dst[2] = *(GLubyte*)src_pos;
-                byte_dst[3] = 255;
-#endif
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // L -> RGB
-    if ((src_format == GL_LUMINANCE) && (dst_format == GL_RGB) && (dst_type == GL_UNSIGNED_BYTE) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                // tmp = *(const GLuint*)src_pos;
-                auto* byte_dst = (unsigned char*)dst_pos;
-                byte_dst[0] = byte_dst[1] = byte_dst[2] = *(GLubyte*)src_pos;
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGBA -> LA
-    if ((src_format == GL_RGBA) && (dst_format == GL_LUMINANCE_ALPHA) && (dst_type == GL_UNSIGNED_BYTE) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                // tmp = *(const GLuint*)src_pos;
-                auto* byte_src = (unsigned char*)src_pos;
-#ifdef __BIG_ENDIAN__
-                *(GLushort*)dst_pos =
-                    ((((int)byte_src[3]) * 77 + ((int)byte_src[2]) * 151 + ((int)byte_src[1]) * 28) & 0xff00) >> 8 |
-                    (byte_src[0] << 8);
-#else
-                *(GLushort*)dst_pos =
-                    ((((int)byte_src[0]) * 77 + ((int)byte_src[1]) * 151 + ((int)byte_src[2]) * 28) & 0xff00) >> 8 |
-                    (byte_src[3] << 8);
-#endif
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGRA -> LA
-    if ((src_format == GL_BGRA) && (dst_format == GL_LUMINANCE_ALPHA) && (dst_type == GL_UNSIGNED_BYTE) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                // tmp = *(const GLuint*)src_pos;
-                auto* byte_src = (unsigned char*)src_pos;
-#ifdef __BIG_ENDIAN__
-                *(GLushort*)dst_pos =
-                    ((((int)byte_src[1]) * 77 + ((int)byte_src[2]) * 151 + ((int)byte_src[3]) * 28) & 0xff00) >> 8 |
-                    (byte_src[0] << 8);
-#else
-                *(GLushort*)dst_pos =
-                    ((((int)byte_src[2]) * 77 + ((int)byte_src[1]) * 151 + ((int)byte_src[0]) * 28) & 0xff00) >> 8 |
-                    (byte_src[3] << 8);
-#endif
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGB(A) -> L
-    if (((src_format == GL_RGBA) || (src_format == GL_RGB)) && (dst_format == GL_LUMINANCE) &&
-        (dst_type == GL_UNSIGNED_BYTE) && ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                // tmp = *(const GLuint*)src_pos;
-                auto* byte_src = (unsigned char*)src_pos;
-#ifdef __BIG_ENDIAN__
-                *(unsigned char*)dst_pos =
-                    (((int)byte_src[3]) * 77 + ((int)byte_src[2]) * 151 + ((int)byte_src[1]) * 28) >> 8;
-#else
-                *(unsigned char*)dst_pos =
-                    (((int)byte_src[0]) * 77 + ((int)byte_src[1]) * 151 + ((int)byte_src[2]) * 28) >> 8;
-#endif
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGR(A) -> L
-    if (((src_format == GL_BGRA) || (src_format == GL_BGR)) && (dst_format == GL_LUMINANCE) &&
-        (dst_type == GL_UNSIGNED_BYTE) && ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                // tmp = *(const GLuint*)src_pos;
-                auto* byte_src = (unsigned char*)src_pos;
-#ifdef __BIG_ENDIAN__
-                *(unsigned char*)dst_pos =
-                    (((int)byte_src[1]) * 77 + ((int)byte_src[2]) * 151 + ((int)byte_src[3]) * 28) >> 8;
-#else
-                *(unsigned char*)dst_pos =
-                    (((int)byte_src[2]) * 77 + ((int)byte_src[1]) * 151 + ((int)byte_src[0]) * 28) >> 8;
-#endif
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGR(A) -> RGB
-    if (((src_format == GL_BGR) || (src_format == GL_BGRA)) && (dst_format == GL_RGB) &&
-        (dst_type == GL_UNSIGNED_BYTE) && ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                ((char*)dst_pos)[0] = ((char*)src_pos)[2];
-                ((char*)dst_pos)[1] = ((char*)src_pos)[1];
-                ((char*)dst_pos)[2] = ((char*)src_pos)[0];
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGR -> RGBA
-    if (((src_format == GL_BGR)) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_BYTE) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                ((unsigned char*)dst_pos)[0] = ((unsigned char*)src_pos)[2];
-                ((unsigned char*)dst_pos)[1] = ((unsigned char*)src_pos)[1];
-                ((unsigned char*)dst_pos)[2] = ((unsigned char*)src_pos)[0];
-                ((unsigned char*)dst_pos)[3] = 255;
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGBA -> RGB
-    if ((src_format == GL_RGBA) && (dst_format == GL_RGB) && (dst_type == GL_UNSIGNED_BYTE) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                ((char*)dst_pos)[0] = ((char*)src_pos)[0];
-                ((char*)dst_pos)[1] = ((char*)src_pos)[1];
-                ((char*)dst_pos)[2] = ((char*)src_pos)[2];
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGB(A) -> RGB565
-    if (((src_format == GL_RGB) || (src_format == GL_RGBA)) && (dst_format == GL_RGB) &&
-        (dst_type == GL_UNSIGNED_SHORT_5_6_5) && ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                *(GLushort*)dst_pos = ((GLushort)(((char*)src_pos)[2] & 0xf8) >> (3)) |
-                                      ((GLushort)(((char*)src_pos)[1] & 0xfc) << (5 - 2)) |
-                                      ((GLushort)(((char*)src_pos)[0] & 0xf8) << (11 - 3));
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGR(A) -> RGB565
-    if (((src_format == GL_BGR) || (src_format == GL_BGRA)) && (dst_format == GL_RGB) &&
-        (dst_type == GL_UNSIGNED_SHORT_5_6_5) && ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                *(GLushort*)dst_pos = ((GLushort)(((char*)src_pos)[0] & 0xf8) >> (3)) |
-                                      ((GLushort)(((char*)src_pos)[1] & 0xfc) << (5 - 2)) |
-                                      ((GLushort)(((char*)src_pos)[2] & 0xf8) << (11 - 3));
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGBA -> RGBA5551
-    if ((src_format == GL_RGBA) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_SHORT_5_5_5_1) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                *(GLushort*)dst_pos = ((GLushort)(((char*)src_pos)[2] & 0xf8) >> (3 - 1)) |
-                                      ((GLushort)(((char*)src_pos)[1] & 0xf8) << (5 - 2)) |
-                                      ((GLushort)(((char*)src_pos)[0] & 0xf8) << (10 - 2)) |
-                                      ((GLushort)(((char*)src_pos)[3]) ? 1 : 0);
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGRA -> RGBA5551
-    if ((src_format == GL_BGRA) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_SHORT_5_5_5_1) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                *(GLushort*)dst_pos = ((GLushort)(((char*)src_pos)[0] & 0xf8) >> (3 - 1)) |
-                                      ((GLushort)(((char*)src_pos)[1] & 0xf8) << (5 - 2)) |
-                                      ((GLushort)(((char*)src_pos)[2] & 0xf8) << (10 - 2)) |
-                                      ((GLushort)(((char*)src_pos)[3]) ? 1 : 0);
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGBA -> RGBA4444
-    if ((src_format == GL_RGBA) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_SHORT_4_4_4_4) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                *(GLushort*)dst_pos =
-                    ((GLushort)(((char*)src_pos)[3] & 0xf0)) >> (4) | ((GLushort)(((char*)src_pos)[2] & 0xf0)) |
-                    ((GLushort)(((char*)src_pos)[1] & 0xf0)) << (4) | ((GLushort)(((char*)src_pos)[0] & 0xf0)) << (8);
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGRA -> RGBA4444
-    if ((src_format == GL_BGRA) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_SHORT_4_4_4_4) &&
-        ((src_type == GL_UNSIGNED_BYTE))) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                *(GLushort*)dst_pos =
-                    ((GLushort)(((char*)src_pos)[3] & 0xf0) >> (4)) | ((GLushort)(((char*)src_pos)[0] & 0xf0)) |
-                    ((GLushort)(((char*)src_pos)[1] & 0xf0) << (4)) | ((GLushort)(((char*)src_pos)[2] & 0xf0) << (8));
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // BGRA4444 -> RGBA
-    if ((src_format == GL_BGRA) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_BYTE) &&
-        (src_type == GL_UNSIGNED_SHORT_4_4_4_4_REV)) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                const GLushort pix = *(GLushort*)src_pos;
-                ((char*)dst_pos)[3] = ((pix >> 12) & 0x0f) << 4;
-                ((char*)dst_pos)[2] = ((pix >> 8) & 0x0f) << 4;
-                ((char*)dst_pos)[1] = ((pix >> 4) & 0x0f) << 4;
-                ((char*)dst_pos)[0] = ((pix) & 0x0f) << 4;
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
-    }
-    // RGBA5551 -> RGBA
-    if ((src_format == GL_RGBA) && (dst_format == GL_RGBA) && (dst_type == GL_UNSIGNED_BYTE) &&
-        (src_type == GL_UNSIGNED_SHORT_5_5_5_1)) {
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                const GLushort pix = *(GLushort*)src_pos;
-                ((unsigned char*)dst_pos)[0] = ((pix >> 11) & 0x1f) << 3;
-                ((unsigned char*)dst_pos)[1] = ((pix >> 6) & 0x1f) << 3;
-                ((unsigned char*)dst_pos)[2] = ((pix >> 1) & 0x1f) << 3;
-                ((unsigned char*)dst_pos)[3] = ((pix) & 0x01) ? 255 : 0;
-                src_pos += src_stride;
-                dst_pos += dst_stride;
-            }
-            dst_pos += dst_width;
-            src_pos += src_widthadj;
-        }
-        return true;
+        *slot = param;
+        break;
+    default:
+        *slot = param != 0 ? 1 : 0;
+        break;
     }
     return true;
+}
+
+bool mg_pixel_store_query_int(GLenum pname, GLint* out) {
+    const GLint* slot = desktop_pixel_store_slot(pname);
+    if (slot == nullptr) return false;
+    if (out != nullptr) *out = *slot;
+    return true;
+}
+
+bool mg_unpack_swaps_bytes(GLenum type) {
+    if (gl_state == nullptr || !gl_state->unpack_swap_bytes) return false;
+    return gl_sizeof(type) > 1;
+}
+
+bool mg_pack_swaps_bytes(GLenum type) {
+    if (gl_state == nullptr || !gl_state->pack_swap_bytes) return false;
+    return gl_sizeof(type) > 1;
 }

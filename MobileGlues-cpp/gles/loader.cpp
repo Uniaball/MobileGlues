@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdio>
 #include <limits.h>
+#include <string>
 #include "loader.h"
 #include "../includes.h"
 #include "loader.h"
@@ -50,7 +51,53 @@ static const char* egl_lib[] = {
 const char* GLES_ANGLE = "libGLESv2_angle.so";
 const char* EGL_ANGLE = "libEGL_angle.so";
 
-void* open_lib(const char** names, const char* override) {
+// Whether ANGLE was actually the library that got loaded. load_libs() falls back
+// to the system driver when ANGLE cannot be opened, which is the right thing for
+// a game -- rendering on the system driver beats not rendering -- but anything
+// that reports on the environment has to be able to tell the two apart.
+bool g_angle_in_use = false;
+
+// The same fact, callable through dlsym. The plugin app's info query loads this
+// library and needs to report which driver answered; the bool above is not
+// exported (the build hides everything not marked), and a function survives
+// symbol-visibility policy changes better than a data export would.
+extern "C" __attribute__((visibility("default"))) int mg_angle_in_use(void) {
+    return g_angle_in_use ? 1 : 0;
+}
+
+// ANGLE ships with the launcher, not with us. Inside the game's process it is
+// simply on the search path; a tool that loads this library on its own (the
+// plugin app's benchmark) has to say where the launcher keeps it, or it would
+// silently measure the system driver instead of the one the game will use.
+//
+// MG_ANGLE_DIR has three states, and the empty one is not the same as absent:
+//
+//   unset  -- nobody is managing this. Look ANGLE up by soname, which is how it
+//             resolves inside the launcher's own process.
+//   empty  -- explicitly do not use ANGLE. A caller that loads us on purpose
+//             says this when it has not been given permission to borrow ANGLE
+//             from anywhere. It cannot just leave the variable unset: once some
+//             earlier run has dlopen'd ANGLE by absolute path, that image is
+//             registered under its soname for the life of the process, and a
+//             plain dlopen("libGLESv2_angle.so") would quietly hand it back.
+//   a path -- take ANGLE from this directory.
+//
+// Returns nullptr for "do not use ANGLE"; otherwise fills `storage` and returns
+// a pointer into it.
+static const char* angle_override(const char* name, std::string& storage) {
+    const char* dir = getenv("MG_ANGLE_DIR");
+    if (dir == nullptr) {
+        storage = name;
+        return storage.c_str();
+    }
+    if (*dir == '\0') return nullptr;
+    storage.assign(dir);
+    if (storage.back() != '/') storage.push_back('/');
+    storage.append(name);
+    return storage.c_str();
+}
+
+void* open_lib(const char** names, const char* override, bool* used_override) {
     void* lib = nullptr;
 
     char path_name[PATH_MAX + 1];
@@ -59,6 +106,7 @@ void* open_lib(const char** names, const char* override) {
         if ((lib = dlopen(override, flags))) {
             strncpy(path_name, override, PATH_MAX);
             LOG_D("LIBGL:loaded: %s\n", path_name)
+            if (used_override) *used_override = true;
             return lib;
         } else {
             LOG_E("LIBGL_GLES override failed: %s\n", dlerror())
@@ -79,10 +127,22 @@ void* open_lib(const char** names, const char* override) {
 
 void load_libs() {
 #ifndef __APPLE__
-    const char* gles_override = global_settings.angle == AngleMode::Enabled ? GLES_ANGLE : nullptr;
-    const char* egl_override = global_settings.angle == AngleMode::Enabled ? EGL_ANGLE : nullptr;
-    gles = open_lib(gles3_lib, gles_override);
-    egl = open_lib(egl_lib, egl_override);
+    const bool want_angle = global_settings.angle == AngleMode::Enabled;
+    std::string gles_angle, egl_angle;
+    const char* gles_override = want_angle ? angle_override(GLES_ANGLE, gles_angle) : nullptr;
+    const char* egl_override = want_angle ? angle_override(EGL_ANGLE, egl_angle) : nullptr;
+
+    // open_lib() falls back to the system driver just as happily as it takes the
+    // override -- right for a game, but then nothing downstream can tell which
+    // of the two it got. Probing the loaded image for an ANGLE symbol would not
+    // answer it either: a device whose system driver *is* ANGLE would say yes.
+    // Only the loader knows, so it reports.
+    g_angle_in_use = false;
+    gles = open_lib(gles3_lib, gles_override, &g_angle_in_use);
+    egl = open_lib(egl_lib, egl_override, nullptr);
+    if (want_angle && !g_angle_in_use) {
+        LOG_E("ANGLE was requested but was not loaded; running on the system driver\n")
+    }
 #else
     gles = (void*)(~(uintptr_t)0);
     egl = (void*)(~(uintptr_t)0);
@@ -103,7 +163,9 @@ void set_hardware() {
 }
 
 void init_gl_state() {
-    gl_state = new gl_state_s;
+    // gl_state already points at g_default_gl_state (gl/mg.h). It used to be
+    // assigned a fresh `new gl_state_s` here -- not value-initialised, so its
+    // members held indeterminate values until each setter ran, and never freed.
     set_gl_state_proxy_height(0);
     set_gl_state_proxy_width(0);
     set_gl_state_proxy_intformat(0);

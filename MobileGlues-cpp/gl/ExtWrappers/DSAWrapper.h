@@ -16,7 +16,6 @@
 #include <cstring>
 #include <iostream>
 #include "../../config/settings.h"
-#include <ankerl/unordered_dense.h>
 #include "../drawing.h"
 
 extern "C"
@@ -127,6 +126,9 @@ extern "C"
     GLAPI void glBindTextureUnit(GLuint unit, GLuint texture);
     GLAPI void glGetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize,
                                  void* pixels);
+    GLAPI void glGetTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                    GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
+                                    GLsizei bufSize, void* pixels);
     GLAPI void glGetCompressedTextureImage(GLuint texture, GLint level, GLsizei bufSize, void* pixels);
     GLAPI void glGetTextureLevelParameterfv(GLuint texture, GLint level, GLenum pname, GLfloat* params);
     GLAPI void glGetTextureLevelParameteriv(GLuint texture, GLint level, GLenum pname, GLint* params);

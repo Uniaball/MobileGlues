@@ -7,7 +7,7 @@
 
 #include "FSR1.h"
 #include <mutex>
-#include <unordered_map>
+#include <ska/flat_hash_map.hpp>
 #include "FSRShaderSource.h"
 #include "../../config/settings.h"
 
@@ -82,8 +82,8 @@ namespace FSR1_Context {
 
     // Cached uniform state — uploaded to GPU only when dirty.
     bool g_uniformsDirty = true;
-    glm::vec4 g_lastConst0 = glm::vec4(0.0f);
-    glm::vec2 g_lastViewportSize = glm::vec2(0.0f);
+    GLfloat g_lastConst0[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    GLfloat g_lastViewportSize[2] = {0.0f, 0.0f};
 
     // Cached viewport state — glViewport skipped when target dimensions match.
     GLsizei g_lastFsrViewportW = 0;
@@ -369,32 +369,36 @@ void ApplyFSR() {
     GLES.glActiveTexture(GL_TEXTURE0);
     GLES.glBindTexture(GL_TEXTURE_2D, FSR1_Context::g_renderTexture);
 
-    glm::vec4 const0 = {float(FSR1_Context::g_renderWidth) / FSR1_Context::g_targetWidth,
-                        float(FSR1_Context::g_renderHeight) / FSR1_Context::g_targetHeight,
-                        1.0f / FSR1_Context::g_targetWidth, 1.0f / FSR1_Context::g_targetHeight};
+    // Plain arrays rather than a vector type from a maths library: these two are
+    // handed straight to glUniform*fv, and nothing is ever computed with them.
+    const GLfloat const0[4] = {float(FSR1_Context::g_renderWidth) / FSR1_Context::g_targetWidth,
+                               float(FSR1_Context::g_renderHeight) / FSR1_Context::g_targetHeight,
+                               1.0f / FSR1_Context::g_targetWidth,
+                               1.0f / FSR1_Context::g_targetHeight};
 
-    glm::vec2 viewportSize = {(float)FSR1_Context::g_renderWidth, (float)FSR1_Context::g_renderHeight};
+    const GLfloat viewportSize[2] = {(float)FSR1_Context::g_renderWidth, (float)FSR1_Context::g_renderHeight};
 
     if (FSR1_Context::g_uniformsDirty) {
         if (FSR1_Context::g_uInputTexLoc >= 0)
             GLES.glUniform1i(FSR1_Context::g_uInputTexLoc, 0);
         if (FSR1_Context::g_uConst0Loc >= 0)
-            GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, reinterpret_cast<const GLfloat*>(&const0));
+            GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, const0);
         if (FSR1_Context::g_uViewportSizeLoc >= 0)
-            GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, reinterpret_cast<const GLfloat*>(&viewportSize));
-        FSR1_Context::g_lastConst0 = const0;
-        FSR1_Context::g_lastViewportSize = viewportSize;
+            GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, viewportSize);
+        memcpy(FSR1_Context::g_lastConst0, const0, sizeof(const0));
+        memcpy(FSR1_Context::g_lastViewportSize, viewportSize, sizeof(viewportSize));
         FSR1_Context::g_uniformsDirty = false;
     } else {
         if (FSR1_Context::g_uInputTexLoc >= 0)
             GLES.glUniform1i(FSR1_Context::g_uInputTexLoc, 0);
-        if (FSR1_Context::g_uConst0Loc >= 0 && FSR1_Context::g_lastConst0 != const0) {
-            GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, reinterpret_cast<const GLfloat*>(&const0));
-            FSR1_Context::g_lastConst0 = const0;
+        if (FSR1_Context::g_uConst0Loc >= 0 && memcmp(FSR1_Context::g_lastConst0, const0, sizeof(const0)) != 0) {
+            GLES.glUniform4fv(FSR1_Context::g_uConst0Loc, 1, const0);
+            memcpy(FSR1_Context::g_lastConst0, const0, sizeof(const0));
         }
-        if (FSR1_Context::g_uViewportSizeLoc >= 0 && FSR1_Context::g_lastViewportSize != viewportSize) {
-            GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, reinterpret_cast<const GLfloat*>(&viewportSize));
-            FSR1_Context::g_lastViewportSize = viewportSize;
+        if (FSR1_Context::g_uViewportSizeLoc >= 0 &&
+            memcmp(FSR1_Context::g_lastViewportSize, viewportSize, sizeof(viewportSize)) != 0) {
+            GLES.glUniform2fv(FSR1_Context::g_uViewportSizeLoc, 1, viewportSize);
+            memcpy(FSR1_Context::g_lastViewportSize, viewportSize, sizeof(viewportSize));
         }
     }
 
@@ -500,7 +504,11 @@ struct fsr1_ctx_state_t {
 };
 
 std::mutex g_fsr_mutex;
-std::unordered_map<unsigned long long, fsr1_ctx_state_t> g_fsr_states;
+// Plain value, not a unique_ptr like the other per-context tables: nothing here
+// keeps the address of an entry. Both operator[] calls in mg_fsr1_bind_context
+// are separate statements, so the first reference is dead before the second one
+// can rehash the map.
+ska::flat_hash_map<unsigned long long, fsr1_ctx_state_t> g_fsr_states;
 fsr1_ctx_state_t g_fsr_default;
 thread_local unsigned long long g_fsr_current_id = 0;
 
@@ -548,4 +556,17 @@ void mg_fsr1_bind_context(unsigned long long ctx_id) {
     store_into(g_fsr_current_id == 0 ? g_fsr_default : g_fsr_states[g_fsr_current_id]);
     load_from(ctx_id == 0 ? g_fsr_default : g_fsr_states[ctx_id]);
     g_fsr_current_id = ctx_id;
+}
+
+void mg_fsr1_forget_context(unsigned long long ctx_id) {
+    if (ctx_id == 0) return;
+    std::lock_guard<std::mutex> lock(g_fsr_mutex);
+    // If this is still the loaded set, the live globals describe a context that is
+    // gone. Drop back to the default set rather than storing them into the entry
+    // about to be erased.
+    if (g_fsr_current_id == ctx_id) {
+        load_from(g_fsr_default);
+        g_fsr_current_id = 0;
+    }
+    g_fsr_states.erase(ctx_id);
 }

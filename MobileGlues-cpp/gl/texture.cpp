@@ -8,9 +8,11 @@
 #include "texture.h"
 #include "../egl/context.h"
 #include <mutex>
-#include <unordered_map>
+#include <memory>
+#include <ska/flat_hash_map.hpp>
 #include "GLES3/gl32.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -26,11 +28,21 @@
 #include "../gles/loader.h"
 #include "framebuffer.h"
 #include "log.h"
+#include "transfer.h"
+#include "pixel.h"
 #include "mg.h"
 #include <GL/gl.h>
-#include <ankerl/unordered_dense.h>
 
 #define DEBUG 0
+
+#define TX_WARN_ONCE(...)                                                                                              \
+    do {                                                                                                               \
+        static bool mg_tx_warned = false;                                                                              \
+        if (!mg_tx_warned) {                                                                                           \
+            mg_tx_warned = true;                                                                                       \
+            LOG_W_FORCE(__VA_ARGS__)                                                                                   \
+        }                                                                                                              \
+    } while (0)
 
 int nlevel(int size, int level) {
     if (size) {
@@ -156,7 +168,15 @@ TextureTarget ConvertGLEnumToTextureTarget(GLenum target) {
     }
 }
 
-const int MAX_TEXTURE_IMAGE_UNITS = 32;
+// glActiveTexture is bounded by GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, not by
+// GL_MAX_TEXTURE_IMAGE_UNITS, and that combined figure is routinely far larger:
+// Mali-G77 reports 96. At 32 this table was smaller than the limit the layer
+// itself advertised, so glActiveTexture(GL_TEXTURE32..95) -- legal by that
+// advertisement, and accepted by the driver -- returned early without telling
+// the driver anything, and the glBindTexture that followed silently landed on
+// whichever unit was active before. mg_max_texture_units() now also caps what
+// the layer is willing to promise, so the two can no longer disagree.
+const int MAX_TEXTURE_IMAGE_UNITS = 128;
 
 class TextureBindingSlot {
 public:
@@ -197,11 +217,20 @@ struct texture_group_state_t {
 struct texture_ctx_state_t {
     std::array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> units;
     int current_unit = 0;
+    // Which share group this context draws its texture objects from. Deleting an
+    // object has to clear it out of every context in that group, not only the one
+    // that happened to issue the glDeleteTextures.
+    unsigned long long group = 0;
 };
 
 std::mutex g_tex_mutex;
-std::unordered_map<unsigned long long, texture_group_state_t> g_tex_groups;
-std::unordered_map<unsigned long long, texture_ctx_state_t> g_tex_ctxs;
+// The tables hold their state by pointer. A thread_local pointer into an entry is
+// the whole point of the design -- the ~90 access sites read through g_bg/g_bc
+// rather than looking anything up -- and the map moves its elements when it
+// grows, so the entry itself must not be what moves. The unique_ptr stays put
+// while the map rehashes around it.
+ska::flat_hash_map<unsigned long long, std::unique_ptr<texture_group_state_t>> g_tex_groups;
+ska::flat_hash_map<unsigned long long, std::unique_ptr<texture_ctx_state_t>> g_tex_ctxs;
 texture_group_state_t g_tex_group_default;
 texture_ctx_state_t g_tex_ctx_default;
 thread_local texture_group_state_t* g_tg = &g_tex_group_default;
@@ -216,8 +245,25 @@ void mg_texture_bind_context(unsigned long long ctx_id, unsigned long long group
         return;
     }
     std::lock_guard<std::mutex> lock(g_tex_mutex);
-    g_tg = &g_tex_groups[group_id];
-    g_tc = &g_tex_ctxs[ctx_id];
+    std::unique_ptr<texture_group_state_t>& group = g_tex_groups[group_id];
+    if (!group) group = std::make_unique<texture_group_state_t>();
+    std::unique_ptr<texture_ctx_state_t>& ctx = g_tex_ctxs[ctx_id];
+    if (!ctx) ctx = std::make_unique<texture_ctx_state_t>();
+    g_tg = group.get();
+    g_tc = ctx.get();
+    g_tc->group = group_id;
+}
+
+void mg_texture_forget_context(unsigned long long ctx_id) {
+    if (ctx_id == 0) return;
+    std::lock_guard<std::mutex> lock(g_tex_mutex);
+    const auto it = g_tex_ctxs.find(ctx_id);
+    if (it == g_tex_ctxs.end()) return;
+    if (g_tc == it->second.get()) g_tc = &g_tex_ctx_default;
+    g_tex_ctxs.erase(it);
+    // The object table is not dropped: it belongs to the share group, whose other
+    // contexts may still be alive, and the objects in it are owned by GL names the
+    // application is still entitled to delete.
 }
 
 #define BufferObjectsVec (g_tg->objects)
@@ -262,6 +308,11 @@ TextureUnit& GetTextureUnit(int unit) {
 }
 
 void MarkTextureObjectForDeletion(unsigned texture) {
+    // Name 0 is not deletable. glBindTexture creates a record for it like any
+    // other name and rewrites that record's target on every bind, so deleting it
+    // would free an object the binding slots of every other target still point at.
+    if (texture == 0) return;
+
     if (texture >= BufferObjectsVec.size() || !BufferObjectsVec[texture]) {
         LOG_D("Texture %u not found in BufferObjectsVec!", texture);
         return;
@@ -269,16 +320,39 @@ void MarkTextureObjectForDeletion(unsigned texture) {
 
     auto textureObject = BufferObjectsVec[texture];
 
-    for (auto& unit : TextureUnits) {
-        auto& bindingSlot = unit.GetBindingSlot(textureObject->target);
-        if (bindingSlot.GetBoundObject() == textureObject) {
-            bindingSlot.Bind(nullptr);
+    // The object table is per share group but the binding slots are per context,
+    // so clearing only this context's slots left every sibling context in the group
+    // holding a pointer to the record about to be freed. Sweep the whole group.
+    //
+    // Every target is scanned rather than just textureObject->target: that field
+    // only remembers the target of the most recent bind, so slots for the other
+    // targets this name was ever bound to would have been left behind.
+    auto sweep = [&](texture_ctx_state_t& ctx) {
+        for (auto& unit : ctx.units) {
+            for (int t = 0; t < (int)TextureTarget::TEXTURES_COUNT; ++t) {
+                auto& slot = unit.GetBindingSlot((TextureBindingSlot::TargetEnum)t);
+                if (slot.GetBoundObject() == textureObject) slot.Bind(nullptr);
+            }
+        }
+    };
+
+    sweep(*g_tc);
+    {
+        std::lock_guard<std::mutex> lock(g_tex_mutex);
+        const unsigned long long group = g_tc->group;
+        for (const auto& entry : g_tex_ctxs) {
+            if (entry.second.get() != g_tc && entry.second->group == group) sweep(*entry.second);
         }
     }
+    // The fallback record is not in the map and is what every untracked context
+    // shares, so it can hold a stale binding too.
+    if (g_tc != &g_tex_ctx_default) sweep(g_tex_ctx_default);
 
     BufferObjectsVec[texture] = nullptr;
     delete textureObject;
 }
+
+int mg_max_texture_units(void) { return MAX_TEXTURE_IMAGE_UNITS; }
 
 TextureObject* mgGetTexObjectByTarget(GLenum target) {
     return GetTextureUnit(GetCurrentTextureUnitIndex())
@@ -294,9 +368,17 @@ TextureObject* mgGetTexObjectByID(unsigned texture) {
     return BufferObjectsVec[texture];
 }
 
-// Inline mapping for various internal formats to format and type
-void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
-    if (format && *format == GL_BGRA) *format = GL_RGBA;
+// Inline mapping for various internal formats to format and type.
+//
+// has_data says whether this call carries bytes for `type` to describe -- the
+// same thing mg_upload_fix_t::has_data() reports, asked early because this runs
+// first. It matters only where an unsized internalformat has to be resolved: an
+// allocation's `type` describes nothing, so resolving storage from it means
+// resolving it from decoration.
+void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format, bool has_data) {
+    // GL_BGRA is deliberately not renamed here: a rename converts the enum and
+    // not the data. Every pixel-transfer entry point routes through
+    // mg_upload_fix_t (gl/transfer.h) before calling this, which converts both.
 
     switch (*internal_format) {
     case GL_DEPTH_COMPONENT16:
@@ -306,7 +388,17 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
         if (type) *type = GL_UNSIGNED_INT;
         break;
     case GL_DEPTH_COMPONENT32:
-        *internal_format = GL_DEPTH_COMPONENT;
+        // No GLES driver accepts GL_DEPTH_COMPONENT32 as an internalformat --
+        // GL_OES_depth32 is absent on both Mali and Adreno -- so it has to become
+        // something else. GL_DEPTH_COMPONENT24 is that something: it keeps the
+        // unorm distribution the name promises (GL_DEPTH_COMPONENT32F does not),
+        // and it is the only depth-only form a depth blit will accept, because
+        // glBlitFramebuffer compares the declared internalformat rather than the
+        // bit count. Going through the unsized GL_DEPTH_COMPONENT instead made
+        // the driver answer GL_DEPTH_COMPONENT32 (Mali) or GL_DEPTH_COMPONENT
+        // (Adreno) to GL_TEXTURE_INTERNAL_FORMAT, neither of which ever matches a
+        // framebuffer, so glCopyTexSubImage2D copied nothing at all.
+        *internal_format = GL_DEPTH_COMPONENT24;
         if (type) *type = GL_UNSIGNED_INT;
         break;
     case GL_DEPTH_COMPONENT32F:
@@ -314,15 +406,69 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
         break;
     case GL_DEPTH_COMPONENT:
         LOG_D("Find GL_DEPTH_COMPONENT: internalFormat: %s, format: %s, type: %s", glEnumToString(*internal_format),
-              glEnumToString(*format), glEnumToString(*type));
-        if (type) {
+              format ? glEnumToString(*format) : "(none)", type ? glEnumToString(*type) : "(none)");
+        if (type && has_data) {
+            // A glTexImage* that carries bytes. Deliberately left unsized:
+            // deriving a sized format from format/type here is what used to make
+            // drivers reject otherwise valid uploads, and ES2 compatibility --
+            // which every ES3 driver carries -- accepts the unsized form with
+            // data.
+            //
+            // GL_FLOAT is the one type that compatibility does not reach. ES2
+            // depth textures predate float depth entirely, so the unsized form
+            // with GL_FLOAT is rejected outright, and a rejected glTexImage2D
+            // leaves the level at its defaults -- the application is then holding
+            // a GL_RGBA texture with no depth bits, and nothing says so.
+            // Measured on Mali-G77: GL_TEXTURE_INTERNAL_FORMAT came back 0x1908
+            // with GL_TEXTURE_DEPTH_SIZE 0, and sampling it returned 0.
+            // GL_DEPTH_COMPONENT32F is the only destination ES 3.0 offers for
+            // float depth, and here the type is evidence: there really are float
+            // bits, and GL 4.6 sec. 8.5 lets the effective internal format of a
+            // base internal format depend on format and type.
+            if (*type == GL_FLOAT) {
+                *internal_format = GL_DEPTH_COMPONENT32F;
+            } else {
+                *internal_format = GL_DEPTH_COMPONENT;
+                *type = GL_UNSIGNED_INT;
+            }
+        } else if (type) {
+            // An allocation-only glTexImage*. The type describes no bytes, so it
+            // must not choose the storage class: the ordinary shadow-map
+            // allocation is glTexImage2D(GL_DEPTH_COMPONENT, ..., GL_FLOAT, NULL)
+            // with GL_FLOAT written out of habit, and honouring it there silently
+            // makes the whole texture floating-point. That matters because
+            // glTexSubImage2D never revisits this function and never inspects the
+            // level, so every later fixed-point upload into a level turned 32F is
+            // rejected by ES -- which binds GL_DEPTH_COMPONENT32F to GL_FLOAT
+            // alone, where GL 4.6 converts -- and the rejection is invisible.
+            // Measured on Mali-G77: the allocation and a following
+            // glTexSubImage2D(GL_UNSIGNED_INT) both succeed as written here, and
+            // resolving to 32F turned that second call into GL_INVALID_OPERATION
+            // with the texture left holding its old contents.
             *internal_format = GL_DEPTH_COMPONENT;
             *type = GL_UNSIGNED_INT;
+        } else {
+            // glTexStorage*. There is no data and no type to be wrong about, and
+            // the unsized form is rejected outright by both vendors -- it is not
+            // in the sized-internalformat table that glTexStorage* requires.
+            // Leaving it alone allocated no storage at all while the layer went
+            // on recording the texture as complete.
+            *internal_format = GL_DEPTH_COMPONENT24;
         }
         break;
     case GL_DEPTH_STENCIL:
-        *internal_format = GL_DEPTH32F_STENCIL8;
-        if (type) *type = GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+        // GL_DEPTH_STENCIL is unsized, so the type is what says which sized
+        // format the application's bytes actually are. Answering
+        // GL_DEPTH32F_STENCIL8 for all of them described 4-byte
+        // GL_UNSIGNED_INT_24_8 data as the 8-byte float-plus-pad layout, which
+        // the driver rejects -- GLES 3.0 has GL_DEPTH24_STENCIL8 and it matches
+        // GL_UNSIGNED_INT_24_8 exactly.
+        if (type && *type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV) {
+            *internal_format = GL_DEPTH32F_STENCIL8;
+        } else {
+            *internal_format = GL_DEPTH24_STENCIL8;
+            if (type) *type = GL_UNSIGNED_INT_24_8;
+        }
         break;
     case GL_RGB10_A2:
         if (type) *type = GL_UNSIGNED_INT_2_10_10_10_REV;
@@ -373,24 +519,47 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
     case GL_RGBA16F:
         if (type) *type = GL_HALF_FLOAT;
         break;
-    case GL_R16:
-        *internal_format = GL_R16F;
-        if (type) *type = GL_FLOAT;
+    // The three cases below asked no question and always answered with a float
+    // format, so on a device that does have GL_EXT_texture_norm16 a plain 16-bit
+    // unorm texture was still turned into a float one -- unlike GL_RGBA16 above,
+    // which has always checked. Where the extension is missing the float
+    // substitution stays: the enums no longer describe the application's shorts,
+    // so the driver rejects the transfer and the upload is dropped rather than
+    // stored wrong.
+    case GL_R16: {
+        if (g_gles_caps.GL_EXT_texture_norm16) {
+            if (type) *type = GL_UNSIGNED_SHORT;
+        } else {
+            *internal_format = GL_R16F;
+            if (type) *type = GL_FLOAT;
+        }
+        if (format) *format = GL_RED;
         break;
-    case GL_RGB16:
-        *internal_format = GL_RGB16F;
-        if (type) *type = GL_HALF_FLOAT;
+    }
+    case GL_RGB16: {
+        if (g_gles_caps.GL_EXT_texture_norm16) {
+            if (type) *type = GL_UNSIGNED_SHORT;
+        } else {
+            *internal_format = GL_RGB16F;
+            if (type) *type = GL_HALF_FLOAT;
+        }
         if (format) *format = GL_RGB;
         break;
+    }
     case GL_RGB16F:
         if (type) *type = GL_HALF_FLOAT;
         if (format) *format = GL_RGB;
         break;
-    case GL_RG16:
-        *internal_format = GL_RG16F;
-        if (type) *type = GL_HALF_FLOAT;
+    case GL_RG16: {
+        if (g_gles_caps.GL_EXT_texture_norm16) {
+            if (type) *type = GL_UNSIGNED_SHORT;
+        } else {
+            *internal_format = GL_RG16F;
+            if (type) *type = GL_HALF_FLOAT;
+        }
         if (format) *format = GL_RG;
         break;
+    }
         // Inline R and RG channel mappings
     case GL_R8:
         if (format) *format = GL_RED;
@@ -503,6 +672,20 @@ void internal_convert(GLenum* internal_format, GLenum* type, GLenum* format) {
     case GL_RGBA8_SNORM:
         if (format) *format = GL_RGBA;
         if (type) *type = GL_BYTE;
+        // This case has never had a break; it used to fall into default:, whose
+        // two tests both miss GL_RGBA8_SNORM, so the values above survived. The
+        // GL_RGB case below was inserted between the two and silently became the
+        // fallthrough target, rewriting them to GL_RGB + GL_UNSIGNED_BYTE.
+        break;
+    // The unsized spelling of the same thing, and the one classic desktop code
+    // uses: glTexImage2D(GL_RGB, ..., GL_RGBA, GL_UNSIGNED_BYTE, rgba) is legal
+    // GL, which drops the alpha during conversion. Only GL_RGB8 was recognised,
+    // so unsized GL_RGB kept format GL_RGBA, ES rejected the pair as an illegal
+    // triple, and the level was never defined -- the texture then sampled black.
+    case GL_RGB:
+        if (format) *format = GL_RGB;
+        if (type && *type != GL_UNSIGNED_BYTE && *type != GL_UNSIGNED_SHORT_5_6_5) *type = GL_UNSIGNED_BYTE;
+        break;
     default:
         // fallback handling for GL_RGB8, GL_RGBA16_SNORM etc.
         if (*internal_format == GL_RGB8) {
@@ -544,10 +727,16 @@ void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
                   GLenum type, const GLvoid* pixels) {
     LOG()
     LOG_D("glTexImage1D not implemented!")
+    // Not implemented: no GLES storage call is ever issued, only the shadow
+    // TextureObject fields below get written. That used to be a LOG_D and
+    // nothing else -- invisible in a release build, and with glGetError
+    // answering GL_NO_ERROR the application had every reason to believe its
+    // level existed. Sampling it reads an incomplete texture instead.
+    mg_set_gl_error(GL_INVALID_OPERATION);
     LOG_D("glTexImage1D, target: %d, level: %d, internalFormat: %d, width: %d, "
           "border: %d, format: %d, type: %d",
           target, level, internalFormat, width, border, format, type)
-    internal_convert(reinterpret_cast<GLenum*>(&internalFormat), &type, &format);
+    internal_convert(reinterpret_cast<GLenum*>(&internalFormat), &type, &format, mg_upload_has_data(pixels));
 
     GLenum rtarget = map_tex_target(target);
     if (rtarget == GL_PROXY_TEXTURE_1D) {
@@ -576,13 +765,41 @@ void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border,
                   GLenum format, GLenum type, const GLvoid* pixels) {
     LOG()
-    GLenum transfer_format = format;
-
     LOG_D("mg_glTexImage2D,target: %s,level: %d,internalFormat: %s->%s,width: "
           "%d,height: %d,border: %d,format: %s,type: %s, pixels: 0x%x",
           glEnumToString(target), level, glEnumToString(internalFormat), glEnumToString(internalFormat), width, height,
           border, glEnumToString(format), glEnumToString(type), pixels)
-    internal_convert(reinterpret_cast<GLenum*>(&internalFormat), &type, &format);
+    // internal_convert is asked first, on copies, and only then is the data
+    // converted to match. It rewrites the client format and type from the
+    // internalformat alone, without touching the bytes -- so running it last let
+    // the enum outrun the data: a three-channel stream relabelled GL_RGBA had the
+    // driver read four bytes per pixel out of a three-byte-per-pixel buffer.
+    //
+    // With data present, only the format is adopted from it, and only because the
+    // conversion below is told to emit that many channels. The type always comes
+    // from the conversion, which is the one thing that knows what the bytes are.
+    // An allocation has no bytes to describe, so there both are adopted.
+    GLenum want_if = static_cast<GLenum>(internalFormat), want_fmt = format, want_type = type;
+    internal_convert(&want_if, &want_type, &want_fmt, mg_upload_has_data(pixels));
+    internalFormat = static_cast<GLint>(want_if);
+
+    mg_upload_fix_t fix(width, height, 1, format, type, pixels, want_fmt, /*three_d=*/false);
+    // A conversion this layer refused -- a source it could not map, or dimensions
+    // whose product does not fit in memory -- means the call has already raised its
+    // error and must not go on to define the level. Without this, `pixels` having
+    // been nulled turned the drop into an allocation with undefined contents, which
+    // is not what GL does after an error: it does nothing.
+    if (fix.dropped()) {
+        CHECK_GL_ERROR
+        return;
+    }
+    if (fix.has_data()) {
+        format = fix.format;
+        type = fix.type;
+    } else {
+        format = want_fmt;
+        type = want_type;
+    }
 
     LOG_D("GLES.glTexImage2D,target: %s,level: %d,internalFormat: %s->%s,width: "
           "%d,height: %d,border: %d,format: %s,type: %s, pixels: 0x%x",
@@ -609,37 +826,9 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
     tex->swizzle_param[2] = GL_BLUE;
     tex->swizzle_param[3] = GL_ALPHA;
 
-    if (transfer_format == GL_BGRA && tex->format != transfer_format && internalFormat == GL_RGBA8 && width <= 128 &&
-        height <= 128) { // xaero has 64x64 tiles...hack here
-        LOG_D("Detected GL_BGRA format @ tex = %d, do swizzle", tex->texture)
-        if (tex->swizzle_param[0] == 0) { // assert this as never called glTexParameteri(...,
-                                          // GL_TEXTURE_SWIZZLE_R, ...)
-            tex->swizzle_param[0] = GL_RED;
-            tex->swizzle_param[1] = GL_GREEN;
-            tex->swizzle_param[2] = GL_BLUE;
-            tex->swizzle_param[3] = GL_ALPHA;
-        }
-
-        GLint r = tex->swizzle_param[0];
-        GLint g = tex->swizzle_param[1];
-        GLint b = tex->swizzle_param[2];
-        GLint a = tex->swizzle_param[3];
-        tex->swizzle_param[0] = g;
-        tex->swizzle_param[1] = b;
-        tex->swizzle_param[2] = a;
-        tex->swizzle_param[3] = r;
-        tex->format = transfer_format;
-
-        GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, tex->swizzle_param[0]);
-        GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_G, tex->swizzle_param[1]);
-        GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, tex->swizzle_param[2]);
-        GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_A, tex->swizzle_param[3]);
-        CHECK_GL_ERROR
-    }
-
     tex->format = format;
 
-    GLES.glTexImage2D(target, level, internalFormat, width, height, border, format, type, pixels);
+    GLES.glTexImage2D(target, level, internalFormat, width, height, border, format, type, fix.pixels);
 
     CHECK_GL_ERROR
 }
@@ -651,7 +840,28 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
           "0x%x, height: %d, depth: %d, border: %d, format: 0x%x, type: %d",
           target, level, internalFormat, width, height, depth, border, format, type)
 
-    internal_convert(reinterpret_cast<GLenum*>(&internalFormat), &type, &format);
+    // Same ordering as glTexImage2D; see the note there.
+    GLenum want_if = static_cast<GLenum>(internalFormat), want_fmt = format, want_type = type;
+    internal_convert(&want_if, &want_type, &want_fmt, mg_upload_has_data(pixels));
+    internalFormat = static_cast<GLint>(want_if);
+
+    mg_upload_fix_t fix(width, height, depth, format, type, pixels, want_fmt);
+    // A conversion this layer refused -- a source it could not map, or dimensions
+    // whose product does not fit in memory -- means the call has already raised its
+    // error and must not go on to define the level. Without this, `pixels` having
+    // been nulled turned the drop into an allocation with undefined contents, which
+    // is not what GL does after an error: it does nothing.
+    if (fix.dropped()) {
+        CHECK_GL_ERROR
+        return;
+    }
+    if (fix.has_data()) {
+        format = fix.format;
+        type = fix.type;
+    } else {
+        format = want_fmt;
+        type = want_type;
+    }
     GLenum rtarget = map_tex_target(target);
     if (rtarget == GL_PROXY_TEXTURE_3D) {
         int max1 = 4096;
@@ -663,7 +873,7 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
         return;
     }
 
-    GLES.glTexImage3D(target, level, internalFormat, width, height, depth, border, format, type, pixels);
+    GLES.glTexImage3D(target, level, internalFormat, width, height, depth, border, format, type, fix.pixels);
 
     GET_TEXTURE_OBJECT(target);
     tex->target = ConvertGLEnumToTextureTarget(target);
@@ -682,9 +892,15 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 void glTexStorage1D(GLenum target, GLsizei levels, GLenum internalFormat, GLsizei width) {
     LOG()
     LOG_D("glTexStorage1D not implemented!")
+    // Not implemented: no GLES storage call is ever issued, only the shadow
+    // TextureObject fields below get written. That used to be a LOG_D and
+    // nothing else -- invisible in a release build, and with glGetError
+    // answering GL_NO_ERROR the application had every reason to believe its
+    // level existed. Sampling it reads an incomplete texture instead.
+    mg_set_gl_error(GL_INVALID_OPERATION);
     LOG_D("glTexStorage1D, target: %d, levels: %d, internalFormat: %d, width: %d", target, levels, internalFormat,
           width)
-    internal_convert(&internalFormat, nullptr, nullptr);
+    internal_convert(&internalFormat, nullptr, nullptr, /*has_data=*/false);
 
     GET_TEXTURE_OBJECT(target);
     tex->target = ConvertGLEnumToTextureTarget(target);
@@ -706,7 +922,7 @@ void glTexStorage2D(GLenum target, GLsizei levels, GLenum internalFormat, GLsize
           "%d, height: %d",
           target, levels, internalFormat, width, height)
 
-    internal_convert(&internalFormat, nullptr, nullptr);
+    internal_convert(&internalFormat, nullptr, nullptr, /*has_data=*/false);
     GLES.glTexStorage2D(target, levels, internalFormat, width, height);
 
     GET_TEXTURE_OBJECT(target);
@@ -731,7 +947,7 @@ void glTexStorage3D(GLenum target, GLsizei levels, GLenum internalFormat, GLsize
           "%d, height: %d, depth: %d",
           target, levels, internalFormat, width, height, depth)
 
-    internal_convert(&internalFormat, nullptr, nullptr);
+    internal_convert(&internalFormat, nullptr, nullptr, /*has_data=*/false);
 
     GLES.glTexStorage3D(target, levels, internalFormat, width, height, depth);
 
@@ -753,6 +969,12 @@ void glCopyTexImage1D(GLenum target, GLint level, GLenum internalFormat, GLint x
                       GLint border) {
     LOG()
     LOG_D("glCopyTexImage1D not implemented!")
+    // Not implemented: no GLES storage call is ever issued, only the shadow
+    // TextureObject fields below get written. That used to be a LOG_D and
+    // nothing else -- invisible in a release build, and with glGetError
+    // answering GL_NO_ERROR the application had every reason to believe its
+    // level existed. Sampling it reads an incomplete texture instead.
+    mg_set_gl_error(GL_INVALID_OPERATION);
     LOG_D("glCopyTexImage1D, target: %d, level: %d, internalFormat: %d, x: %d, "
           "y: %d, width: %d, border: %d",
           target, level, internalFormat, x, y, width, border)
@@ -771,12 +993,33 @@ void glCopyTexImage1D(GLenum target, GLint level, GLenum internalFormat, GLint x
     CHECK_GL_ERROR
 }
 
+// Depth without stencil. GL_DEPTH_COMPONENT32 belongs here even though no GLES
+// driver accepts it as an internalformat: this predicate is fed by
+// GL_TEXTURE_INTERNAL_FORMAT, and a level created from the unsized
+// GL_DEPTH_COMPONENT is reported back as exactly GL_DEPTH_COMPONENT32 by Mali.
+// Leaving it out sent those levels down the colour path, where
+// glCopyTexSubImage2D silently copied nothing.
 static int is_depth_format(GLenum format) {
     switch (format) {
     case GL_DEPTH_COMPONENT:
     case GL_DEPTH_COMPONENT16:
     case GL_DEPTH_COMPONENT24:
+    case GL_DEPTH_COMPONENT32:
     case GL_DEPTH_COMPONENT32F:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+// Combined depth+stencil. Kept apart from is_depth_format() because these need a
+// different attachment point and a different blit mask -- treating them as plain
+// depth attaches only half the texture and drops the stencil half on the floor.
+static int is_depth_stencil_format(GLenum format) {
+    switch (format) {
+    case GL_DEPTH_STENCIL:
+    case GL_DEPTH24_STENCIL8:
+    case GL_DEPTH32F_STENCIL8:
         return 1;
     default:
         return 0;
@@ -803,11 +1046,27 @@ void glCopyTexImage2D(GLenum target, GLint level, GLenum internalFormat, GLint x
                       GLsizei height, GLint border) {
     LOG()
 
+    // The source is the read framebuffer; under FSR1 that has to be the render
+    // target, not the surface. Matters most on the depth path below, whose depth
+    // buffer lives on the FSR1 target and was never on the surface at all.
+    mg_fsr_read_scope_t fsr_read;
+
     INIT_CHECK_GL_ERROR
 
-    GLint realInternalFormat;
-    GLES.glGetTexLevelParameteriv(target, level, GL_TEXTURE_INTERNAL_FORMAT, &realInternalFormat);
-    internalFormat = (GLenum)realInternalFormat;
+    // This call *defines* the level, so the internalformat it is given is the
+    // caller's to choose. Overwriting it with the destination's own meant the
+    // ordinary first call -- where the level does not exist yet and the query
+    // answers 0 -- threw that choice away and always took the colour path below,
+    // however the application had asked for the level to be created.
+    //
+    // The query is still worth asking for the one case it was protecting: an
+    // application re-copying into a level that is already a depth texture needs
+    // the blit path, and glCopyTexImage2D cannot reach it from a colour enum.
+    GLint existingInternalFormat = 0;
+    GLES.glGetTexLevelParameteriv(target, level, GL_TEXTURE_INTERNAL_FORMAT, &existingInternalFormat);
+    if (!is_depth_format(internalFormat) && is_depth_format((GLenum)existingInternalFormat)) {
+        internalFormat = (GLenum)existingInternalFormat;
+    }
 
     LOG_D("glCopyTexImage2D, target: %d, level: %d, internalFormat: %d, x: %d, "
           "y: %d, width: %d, height: %d, border: %d",
@@ -816,7 +1075,7 @@ void glCopyTexImage2D(GLenum target, GLint level, GLenum internalFormat, GLint x
     if (is_depth_format(internalFormat)) {
         GLenum format = GL_DEPTH_COMPONENT;
         GLenum type = GL_UNSIGNED_INT;
-        internal_convert(&internalFormat, &type, &format);
+        internal_convert(&internalFormat, &type, &format, /*has_data=*/false);
         GLES.glTexImage2D(target, level, (GLint)internalFormat, width, height, border, format, type, nullptr);
         CHECK_GL_ERROR_NO_INIT
         GLint prevDrawFBO;
@@ -843,6 +1102,9 @@ void glCopyTexImage2D(GLenum target, GLint level, GLenum internalFormat, GLint x
         }
         CHECK_GL_ERROR_NO_INIT
 
+        // Flush before reading depth through a blit -- see the note in
+        // glCopyTexSubImage2D for the Adreno measurement behind this.
+        if (GLES.glFlush != nullptr) GLES.glFlush();
         GLES.glBlitFramebuffer(x, y, x + width, y + height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
         CHECK_GL_ERROR_NO_INIT
 
@@ -872,6 +1134,9 @@ void glCopyTexImage2D(GLenum target, GLint level, GLenum internalFormat, GLint x
 void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                          GLsizei height) {
     LOG()
+    // Same as glCopyTexImage2D: read from where the frame really is.
+    mg_fsr_read_scope_t fsr_read;
+
     GLint internalFormat;
     GLES.glGetTexLevelParameteriv(target, level, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
 
@@ -879,9 +1144,14 @@ void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffse
           "x: %d, y: %d, width: %d, height: %d",
           glEnumToString(target), level, xoffset, yoffset, x, y, width, height)
 
-    if (is_depth_format((GLenum)internalFormat)) {
-        GLint prevReadFBO, prevDrawFBO;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+    const int depth_stencil = is_depth_stencil_format((GLenum)internalFormat);
+    if (depth_stencil || is_depth_format((GLenum)internalFormat)) {
+        const GLenum attachment = depth_stencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
+        const GLbitfield mask = depth_stencil ? (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT) : GL_DEPTH_BUFFER_BIT;
+
+        // The read framebuffer is the source and is left exactly as the caller
+        // had it; only the draw binding is borrowed and put back.
+        GLint prevDrawFBO;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
 
         GLuint tempDrawFBO;
@@ -890,19 +1160,50 @@ void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffse
 
         GLint currentTex;
         glGetIntegerv(get_binding_for_target(target), &currentTex);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, target, currentTex, level);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, attachment, target, currentTex, level);
 
         if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            TX_WARN_ONCE("glCopyTexSubImage2D: depth destination (internalformat 0x%04X) will not make a complete "
+                         "framebuffer; the copy was skipped",
+                         (unsigned)internalFormat);
             glDeleteFramebuffers(1, &tempDrawFBO);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
             return;
         }
 
-        GLES.glBlitFramebuffer(x, y, x + width, y + height, xoffset, yoffset, xoffset + width, yoffset + height,
-                               GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        // glBlitFramebuffer is far stricter than glCopyTexSubImage2D: for the
+        // depth and stencil bits GLES demands the source and destination formats
+        // be identical, where GL 4.6 converts. A depth-only texture cannot be
+        // filled from a depth+stencil framebuffer, nor the reverse, and the
+        // failure is invisible from here -- this layer's glGetError never
+        // reports. Say so once rather than copying nothing in silence.
+        if (GLES.glGetError != nullptr) {
+            while (GLES.glGetError() != GL_NO_ERROR) {
+            }
+        }
+        // The flush is load-bearing. Adreno keeps the source's pending depth
+        // writes in an unsubmitted tile pass, and this blit reads the buffer as
+        // it is in memory -- for the first depth blit from a fresh default
+        // framebuffer that is garbage, silently, with no error raised. Measured
+        // on Adreno 750: without this, the first copy in a context reads junk
+        // (two back-to-back blits BOTH read junk, so retrying is no fix) while a
+        // single glFlush beforehand makes the same copy read the true values,
+        // reproducibly. glFinish also works but synchronizes the CPU; the flush
+        // is enough. Mali needs neither and is unaffected. Copies are rare
+        // operations, so one flush here is cheap.
+        if (GLES.glFlush != nullptr) GLES.glFlush();
+        GLES.glBlitFramebuffer(x, y, x + width, y + height, xoffset, yoffset, xoffset + width, yoffset + height, mask,
+                               GL_NEAREST);
+        if (GLES.glGetError != nullptr && GLES.glGetError() != GL_NO_ERROR) {
+            TX_WARN_ONCE("glCopyTexSubImage2D: the driver refused a depth blit into internalformat 0x%04X -- GLES "
+                         "requires the source framebuffer to have exactly the same depth/stencil format, so nothing "
+                         "was copied",
+                         (unsigned)internalFormat);
+        }
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
         glDeleteFramebuffers(1, &tempDrawFBO);
+
     } else {
         GLES.glCopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
@@ -1030,22 +1331,20 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
           glEnumToString(target), level, xoffset, yoffset, width, height, glEnumToString(format), glEnumToString(type),
           pixels)
 
-    if (format == GL_BGRA) {
-        if (type == GL_UNSIGNED_INT_8_8_8_8) { // Stored as ARGB -> RGBA
-            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_A, GL_RED);
-            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, GL_GREEN);
-            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_G, GL_BLUE);
-            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, GL_ALPHA);
-
-        } else if (type == GL_UNSIGNED_INT_8_8_8_8_REV) { // Stored as BGRA -> RGBA
-            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, GL_RED);
-            GLES.glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
-        }
-        format = GL_RGBA;
-        type = GL_UNSIGNED_BYTE;
+    // A sub-upload must convert its data like any other transfer. The previous
+    // code set a texture swizzle here instead -- sampling state, permanently
+    // changed as a side effect of an upload, wrong the moment the application
+    // uploads RGBA to the same texture, renders into it, or swizzles it itself.
+    mg_upload_fix_t fix(width, height, 1, format, type, pixels, /*want_format=*/0, /*three_d=*/false);
+    // A dropped conversion leaves pixels null, and glTexSubImage2D has no
+    // allocate-only form: with the unpack buffer unbound the driver would read
+    // client memory from address zero.
+    if (fix.dropped()) {
+        CHECK_GL_ERROR
+        return;
     }
 
-    GLES.glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+    GLES.glTexSubImage2D(target, level, xoffset, yoffset, width, height, fix.format, fix.type, fix.pixels);
 
     CHECK_GL_ERROR
 }
@@ -1096,6 +1395,12 @@ void glActiveTexture(GLenum texture) {
     LOG()
     LOG_D("glActiveTexture, texture = %s", glEnumToString(texture))
     if (texture < GL_TEXTURE0 || texture >= GL_TEXTURE0 + MAX_TEXTURE_IMAGE_UNITS) {
+        // Returning here leaves the active unit where it was, so the caller's
+        // next glBindTexture goes somewhere it did not ask for. Nothing can
+        // report that -- this layer's glGetError never does -- so say it once.
+        TX_WARN_ONCE("glActiveTexture: unit %d is past the %d this layer tracks; the call was ignored and the active "
+                     "unit left unchanged",
+                     (int)(texture - GL_TEXTURE0), MAX_TEXTURE_IMAGE_UNITS);
         LOG_E("Invalid texture enum: %s", glEnumToString(texture))
         return;
     }
@@ -1127,6 +1432,11 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void*
         textureBindingTarget = GL_TEXTURE_BINDING_2D;
     } else {
         LOG_E("glGetTexImage: Unsupported or complex target: 0x%x", target)
+        // Said nothing to the application before. 3D, array and rectangle
+        // targets are legal desktop reads this emulation cannot express as a
+        // colour-attachment read, and returning quietly handed back an
+        // untouched buffer that looked like a successful image.
+        mg_set_gl_error(GL_INVALID_OPERATION);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
         glDeleteFramebuffers(1, &tempFBO);
@@ -1136,6 +1446,7 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void*
 
     if (textureId == 0) {
         LOG_E("glGetTexImage: No texture bound to the specified target.")
+        mg_set_gl_error(GL_INVALID_OPERATION);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
         glDeleteFramebuffers(1, &tempFBO);
@@ -1148,6 +1459,7 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void*
 
     if (width == 0 || height == 0) {
         LOG_E("glGetTexImage: Texture level %d has zero width or height.", level)
+        mg_set_gl_error(GL_INVALID_VALUE);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
         glDeleteFramebuffers(1, &tempFBO);
@@ -1163,6 +1475,11 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void*
     GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (fboStatus != GL_FRAMEBUFFER_COMPLETE) {
         LOG_E("glGetTexImage: Failed to create complete framebuffer. Status: 0x%x", fboStatus)
+        // Overwhelmingly this is a depth or depth-stencil level: it is not
+        // colour-renderable, so hanging it off GL_COLOR_ATTACHMENT0 can never
+        // complete. A shadow-map readback used to land here and return in
+        // silence.
+        mg_set_gl_error(GL_INVALID_OPERATION);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
         glDeleteFramebuffers(1, &tempFBO);
@@ -1170,6 +1487,21 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void*
     }
 
     glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+    // Asked here, with the scratch framebuffer bound, because the pair GLES
+    // accepts besides GL_RGBA/GL_UNSIGNED_BYTE is chosen per read framebuffer.
+    // Forwarding a pair it refuses used to return with the destination untouched
+    // and nothing said: the caller wrote its own uninitialised buffer out as a
+    // texture dump.
+    if (!mg_readback_pair_supported(format, type)) {
+        LOG_E("glGetTexImage: %s + %s cannot be read back on this backend", glEnumToString(format),
+              glEnumToString(type))
+        mg_set_gl_error(GL_INVALID_OPERATION);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
+        glDeleteFramebuffers(1, &tempFBO);
+        return;
+    }
 
     glReadPixels(0, 0, width, height, format, type, pixels);
 
@@ -1183,36 +1515,41 @@ void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void*
 #include <fstream>
 #endif
 
+void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
+                     GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
+    LOG()
+    LOG_D("glTexSubImage3D, target = %s, level = %d, offset = (%d,%d,%d), size = (%d,%d,%d), format = %s, type = %s",
+          glEnumToString(target), level, xoffset, yoffset, zoffset, width, height, depth, glEnumToString(format),
+          glEnumToString(type))
+    mg_upload_fix_t fix(width, height, depth, format, type, pixels);
+    if (fix.dropped()) {
+        CHECK_GL_ERROR
+        return;
+    }
+    GLES.glTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth, fix.format, fix.type,
+                         fix.pixels);
+    CHECK_GL_ERROR
+}
+
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
     LOG()
     LOG_D("glReadPixels, x=%d, y=%d, width=%d, height=%d, format=0x%x, "
           "type=0x%x, pixels=0x%x",
           x, y, width, height, format, type, pixels)
 
-    static int count = 0;
-    GLenum prevFormat = format;
+    // Source the frame the application actually drew, not the window surface it
+    // has not been rendering into since FSR1 was switched on. No-op otherwise.
+    mg_fsr_read_scope_t fsr_read;
 
-    if (format == GL_BGRA && type == GL_UNSIGNED_INT_8_8_8_8) {
-        format = GL_RGBA;
-        type = GL_UNSIGNED_BYTE;
+    // Encodes BGRA and the packed 8888 layouts from an RGBA readback; the old
+    // code renamed one type combination and wrote RGBA bytes into a buffer the
+    // application would read as BGRA.
+    if (mg_transfer_readback(x, y, width, height, format, type, pixels)) {
+        CHECK_GL_ERROR
+        return;
     }
-    LOG_D("glReadPixels converted, x=%d, y=%d, width=%d, height=%d, format=0x%x, "
-          "type=0x%x, pixels=0x%x",
-          x, y, width, height, format, type, pixels)
     GLES.glReadPixels(x, y, width, height, format, type, pixels);
 
-#if GLOBAL_DEBUG || DEBUG
-    if (prevFormat == GL_BGRA && type == GL_UNSIGNED_BYTE) {
-        std::vector<uint8_t> px(width * height * sizeof(uint8_t) * 4, 0);
-        GLES.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        GLES.glReadPixels(x, y, width, height, format, type, px.data());
-
-        std::fstream fs(std::string(concatenate(mg_directory_path, "/readpixels/")) + std::to_string(count++) + ".bin",
-                        std::ios::out | std::ios::binary | std::ios::trunc);
-        fs.write((const char*)px.data(), px.size());
-        fs.close();
-    }
-#endif
     CHECK_GL_ERROR
 }
 
@@ -1230,10 +1567,147 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param) {
     CHECK_GL_ERROR
 }
 
+namespace {
+
+// The clear values are context state, not framebuffer state, so the ones
+// glClearTexImage sets to clear its temporary attachment are the ones the
+// application's next glClear used. Restoring them from a destructor is what
+// makes that true of every exit from the function, not only the last one.
+struct clear_state_guard_t {
+    GLfloat color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    GLfloat depth = 1.0f;
+    GLint stencil = 0;
+
+    clear_state_guard_t() {
+        GLES.glGetFloatv(GL_COLOR_CLEAR_VALUE, color);
+        GLES.glGetFloatv(GL_DEPTH_CLEAR_VALUE, &depth);
+        GLES.glGetIntegerv(GL_STENCIL_CLEAR_VALUE, &stencil);
+    }
+
+    ~clear_state_guard_t() {
+        GLES.glClearColor(color[0], color[1], color[2], color[3]);
+        GLES.glClearDepthf(depth);
+        GLES.glClearStencil(stencil);
+    }
+
+    clear_state_guard_t(const clear_state_guard_t&) = delete;
+    clear_state_guard_t& operator=(const clear_state_guard_t&) = delete;
+};
+
+// Reads the one texel glClearTexImage was handed into the three clear
+// registers. False means the combination cannot be read, which the caller
+// drops: clearing to a value the application never named is a wrong image that
+// looks like a right one.
+bool decode_clear_value(GLenum format, GLenum type, const void* data, GLfloat* rgba, GLfloat* depth, GLint* stencil) {
+    switch (format) {
+    case GL_RGBA:
+    case GL_RGB:
+    case GL_BGRA:
+    case GL_BGR: {
+        const bool has_alpha = (format == GL_RGBA || format == GL_BGRA);
+        const bool reversed = (format == GL_BGRA || format == GL_BGR);
+        if (type == GL_UNSIGNED_BYTE) {
+            const auto* b = static_cast<const GLubyte*>(data);
+            rgba[0] = (GLfloat)b[reversed ? 2 : 0] / 255.0f;
+            rgba[1] = (GLfloat)b[1] / 255.0f;
+            rgba[2] = (GLfloat)b[reversed ? 0 : 2] / 255.0f;
+            rgba[3] = has_alpha ? (GLfloat)b[3] / 255.0f : 1.0f;
+            return true;
+        }
+        if (type == GL_FLOAT) {
+            const auto* f = static_cast<const GLfloat*>(data);
+            rgba[0] = f[reversed ? 2 : 0];
+            rgba[1] = f[1];
+            rgba[2] = f[reversed ? 0 : 2];
+            rgba[3] = has_alpha ? f[3] : 1.0f;
+            return true;
+        }
+        return false;
+    }
+    case GL_DEPTH_COMPONENT:
+        if (type == GL_FLOAT) {
+            *depth = static_cast<const GLfloat*>(data)[0];
+            return true;
+        }
+        if (type == GL_UNSIGNED_SHORT) {
+            *depth = (GLfloat)static_cast<const GLushort*>(data)[0] / 65535.0f;
+            return true;
+        }
+        if (type == GL_UNSIGNED_INT) {
+            *depth = (GLfloat)((double)static_cast<const GLuint*>(data)[0] / 4294967295.0);
+            return true;
+        }
+        return false;
+    case GL_STENCIL_INDEX:
+        if (type == GL_UNSIGNED_BYTE) {
+            *stencil = static_cast<const GLubyte*>(data)[0];
+            return true;
+        }
+        if (type == GL_UNSIGNED_INT) {
+            *stencil = (GLint)static_cast<const GLuint*>(data)[0];
+            return true;
+        }
+        return false;
+    case GL_DEPTH_STENCIL:
+        if (type == GL_UNSIGNED_INT_24_8) {
+            GLuint v;
+            memcpy(&v, data, sizeof(v));
+            *depth = (GLfloat)((double)(v >> 8) / 16777215.0);
+            *stencil = (GLint)(v & 0xff);
+            return true;
+        }
+        if (type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV) {
+            GLfloat d;
+            GLuint s;
+            memcpy(&d, data, sizeof(d));
+            memcpy(&s, static_cast<const GLubyte*>(data) + sizeof(d), sizeof(s));
+            *depth = d;
+            *stencil = (GLint)(s & 0xff);
+            return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
 void glClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type, const void* data) {
     LOG()
-    LOG_D("glClearTexImage, texture: %d, level: %d, format: %d, type: %d", texture, level, format, type)
+    LOG_D("glClearTexImage, texture: %d, level: %d, format: %s, type: %s", texture, level, glEnumToString(format),
+          glEnumToString(type))
     INIT_CHECK_GL_ERROR_FORCE
+
+    // GL 4.6 sec. 8.15: a null pointer clears the level to zero, a non-null one
+    // clears it to that value. A value this could not read used to fall through
+    // as the transparent black set up front, which the application cannot tell
+    // from a clear it asked for -- so it is dropped with a warning instead.
+    GLfloat rgba[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    GLfloat depth = 0.0f;
+    GLint stencil = 0;
+    if (data != nullptr && !decode_clear_value(format, type, data, rgba, &depth, &stencil)) {
+        TX_WARN_ONCE("glClearTexImage: cannot read a clear value of %s + %s, clear dropped", glEnumToString(format),
+                     glEnumToString(type));
+        return;
+    }
+
+    // Where the level has to be attached, and what clearing it means. A depth or
+    // stencil texture hung on GL_COLOR_ATTACHMENT0 never completes, so those
+    // formats used to leave the function having cleared nothing.
+    GLenum attachment = GL_COLOR_ATTACHMENT0;
+    GLbitfield mask = GL_COLOR_BUFFER_BIT;
+    if (format == GL_DEPTH_COMPONENT) {
+        attachment = GL_DEPTH_ATTACHMENT;
+        mask = GL_DEPTH_BUFFER_BIT;
+    } else if (format == GL_STENCIL_INDEX) {
+        attachment = GL_STENCIL_ATTACHMENT;
+        mask = GL_STENCIL_BUFFER_BIT;
+    } else if (format == GL_DEPTH_STENCIL) {
+        attachment = GL_DEPTH_STENCIL_ATTACHMENT;
+        mask = GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+    }
+
     GLuint fbo, prevDrawFBO, prevReadFBO;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, (int*)&prevDrawFBO);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, (int*)&prevReadFBO);
@@ -1241,63 +1715,115 @@ void glClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type, co
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     CHECK_GL_ERROR_NO_INIT
 
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, level);
-
-    CHECK_GL_ERROR_NO_INIT
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        LOG_D("  -> exit")
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
-        glDeleteFramebuffers(1, &fbo);
-        CHECK_GL_ERROR_NO_INIT
-        return;
-    }
-
-    GLES.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    clear_state_guard_t clear_guard;
+    GLES.glClearColor(rgba[0], rgba[1], rgba[2], rgba[3]);
+    GLES.glClearDepthf(depth);
+    GLES.glClearStencil(stencil);
     CHECK_GL_ERROR_NO_INIT
 
-    if (data != nullptr) {
-        if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
-            auto* byteData = static_cast<const GLubyte*>(data);
-            GLES.glClearColor((float)byteData[0] / 255.0f, (float)byteData[1] / 255.0f, (float)byteData[2] / 255.0f,
-                              (float)byteData[3] / 255.0f);
-        } else if (format == GL_RGB && type == GL_UNSIGNED_BYTE) {
-            auto* byteData = static_cast<const GLubyte*>(data);
-            GLES.glClearColor((float)byteData[0] / 255.0f, (float)byteData[1] / 255.0f, (float)byteData[2] / 255.0f,
-                              1.0f);
-        } else if (format == GL_RGBA && type == GL_FLOAT) {
-            auto* floatData = static_cast<const GLfloat*>(data);
-            GLES.glClearColor(floatData[0], floatData[1], floatData[2], floatData[3]);
-        } else if (format == GL_RGB && type == GL_FLOAT) {
-            auto* floatData = static_cast<const GLfloat*>(data);
-            GLES.glClearColor(floatData[0], floatData[1], floatData[2], 1.0f);
-        } else if (format == GL_DEPTH_COMPONENT && type == GL_FLOAT) {
-            auto* depthData = static_cast<const GLfloat*>(data);
-            GLES.glClearDepthf(depthData[0]);
-            GLES.glClear(GL_DEPTH_BUFFER_BIT);
-        } else if (format == GL_STENCIL_INDEX && type == GL_UNSIGNED_BYTE) {
-            auto* stencilData = static_cast<const GLubyte*>(data);
-            GLES.glClearStencil(stencilData[0]);
-            GLES.glClear(GL_STENCIL_BUFFER_BIT);
+    // Only a 2D-shaped image can be attached with glFramebufferTexture2D and
+    // GL_TEXTURE_2D. A cube map is six of those and a 3D or array texture is one
+    // attachment per layer; handing either to the 2D form attached nothing, so
+    // the framebuffer was never complete and nothing was cleared.
+    TextureObject* tex = mgGetTexObjectByID(texture);
+    const TextureTarget textureTarget = tex ? tex->target : TextureTarget::TEXTURE_2D;
+
+    auto attach_and_clear = [&](GLenum face, GLint layer) -> bool {
+        if (layer < 0) {
+            glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, face, texture, level);
+        } else {
+            GLES.glFramebufferTextureLayer(GL_FRAMEBUFFER, attachment, texture, level, layer);
         }
-    }
-    CHECK_GL_ERROR_NO_INIT
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
+        GLES.glClear(mask);
+        return true;
+    };
 
-    if (format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX) {
-        GLES.glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        CHECK_GL_ERROR_NO_INIT
-    } else {
-        GLES.glClear(GL_COLOR_BUFFER_BIT);
-        CHECK_GL_ERROR_NO_INIT
+    bool cleared = true;
+    switch (textureTarget) {
+    case TextureTarget::TEXTURE_CUBE_MAP:
+        for (GLenum face = GL_TEXTURE_CUBE_MAP_POSITIVE_X; cleared && face <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z; ++face) {
+            cleared = attach_and_clear(face, -1);
+        }
+        break;
+    case TextureTarget::TEXTURE_3D:
+    case TextureTarget::TEXTURE_2D_ARRAY:
+    case TextureTarget::TEXTURE_1D_ARRAY:
+    case TextureTarget::TEXTURE_CUBE_MAP_ARRAY: {
+        // The level is only whole once every layer of it has been cleared, so the
+        // layer count has to be this level's, not some other level's.
+        //
+        // It is queried rather than derived from TextureObject::depth: glTexImage3D
+        // writes that field on every call, including every mip level, so a texture
+        // uploaded level by level leaves it holding the smallest mip's depth. Using
+        // it would clear a handful of layers of level 0 and report success -- the
+        // silent partial clear this whole change exists to remove. The driver knows
+        // the real extent of the level being cleared.
+        GLint queried = 0;
+        GLES.glGetTexLevelParameteriv(ConvertTextureTargetToGLEnum(textureTarget), level, GL_TEXTURE_DEPTH, &queried);
+        GLsizei layers = (GLsizei)queried;
+        if (layers <= 0) {
+            // No answer from the driver; fall back to the tracked depth, which is
+            // right whenever the storage came from glTexStorage3D (recorded once)
+            // and for arrays (no per-level shrink).
+            layers = tex ? (GLsizei)nlevel(tex->depth, textureTarget == TextureTarget::TEXTURE_3D ? level : 0) : 0;
+        }
+        if (layers <= 0) {
+            cleared = false;
+            break;
+        }
+        for (GLint layer = 0; cleared && layer < layers; ++layer) {
+            cleared = attach_and_clear(GL_NONE, layer);
+        }
+        break;
     }
+    default:
+        cleared = attach_and_clear(GL_TEXTURE_2D, -1);
+        break;
+    }
+
+    if (!cleared) {
+        TX_WARN_ONCE("glClearTexImage: texture %u (%s) level %d as %s cannot be attached to a framebuffer, "
+                     "nothing was cleared",
+                     texture, glEnumToString(ConvertTextureTargetToGLEnum(textureTarget)), level,
+                     glEnumToString(format));
+    }
+
     glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
     glDeleteFramebuffers(1, &fbo);
     CHECK_GL_ERROR_NO_INIT
 }
 
+// Pixel-store parameters desktop GL has and GLES does not.
+//
+// Forwarding them earned a GL_INVALID_ENUM from the driver and nothing else --
+// which, while glGetError was lying, the application could not even see. Swallow
+// them instead: the error was never the application's fault, and raising one for
+// a parameter it is entitled to set under the API this layer advertises would be
+// worse than the silence. What the layer cannot do is honour them; nothing here
+// byte-swaps, so an application feeding big-endian component data through
+// GL_UNPACK_SWAP_BYTES still gets it unswapped, and says so once in the log.
 void glPixelStorei(GLenum pname, GLint param) {
     LOG_D("glPixelStorei, pname = %s, param = %d", glEnumToString(pname), param)
+    // Kept here rather than forwarded. GLES has neither the two SWAP_BYTES, the
+    // two LSB_FIRST, nor PACK_IMAGE_HEIGHT / PACK_SKIP_IMAGES, so the driver
+    // answered GL_INVALID_ENUM and dropped the value -- and glGetIntegerv, going
+    // the same way, left the application's variable untouched, so the parameter
+    // could be neither set nor read. The shadow in gl_state_s closes both halves;
+    // what is actually honoured is documented there.
+    if (mg_pixel_store_set(pname, param)) return;
     GLES.glPixelStorei(pname, param);
+    CHECK_GL_ERROR
+}
+
+void glPixelStoref(GLenum pname, GLfloat param) {
+    LOG_D("glPixelStoref, pname = %s, param = %f", glEnumToString(pname), param)
+    // The two entry points set the same state; this one was a stub, so an
+    // application that set its alignment or row length through the float form
+    // transferred with whatever the previous state happened to be. Every
+    // pixel-store parameter GLES has is integer-valued, and GL 4.6 sec. 8.4.1
+    // rounds this form to the nearest integer for those.
+    glPixelStorei(pname, (GLint)lroundf(param));
     CHECK_GL_ERROR
 }

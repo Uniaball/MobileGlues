@@ -6,6 +6,7 @@
 // End of Source File Header
 
 #include "enable.h"
+#include "pixel.h"
 #include "../gles/loader.h"
 #include "log.h"
 #include "mg.h"
@@ -144,19 +145,10 @@ void mg_enable_reset(mg_enable_state_t* state) {
         state->scalar[d.index] = d.initial;
     }
 
-    // GL 4.6 says GL_MULTISAMPLE starts enabled. Without
-    // GL_EXT_multisample_compatibility the application cannot turn multisampling
-    // off anyway -- it is decided by the EGL config -- so reporting the
-    // specification's GL_TRUE on a single-sampled framebuffer would be a lie in
-    // the other direction. Seed it from what the framebuffer actually is, then
-    // track whatever the application sets so enable/disable still round-trips.
-    if (!ext_backing_present(GL_MULTISAMPLE)) {
-        GLint samples = 0;
-        if (GLES.glGetIntegerv) GLES.glGetIntegerv(GL_SAMPLES, &samples);
-        state->scalar[MGC_MULTISAMPLE] = samples > 0 ? GL_TRUE : GL_FALSE;
-    } else {
-        state->scalar[MGC_MULTISAMPLE] = GL_TRUE;
-    }
+    // GL 4.6 says GL_MULTISAMPLE starts enabled. Where the extension is missing
+    // the value is seeded from the framebuffer instead, but that has to wait for
+    // the context to be current -- see mg_enable_sync_driver().
+    state->scalar[MGC_MULTISAMPLE] = GL_TRUE;
 
     // GL_BLEND is per draw buffer and GL_SCISSOR_TEST per viewport; the scalar
     // form of each is index 0.
@@ -165,6 +157,38 @@ void mg_enable_reset(mg_enable_state_t* state) {
 
     state->primitive_restart_index = 0;
     state->initialised = true;
+    state->driver_synced = false;
+}
+
+void mg_enable_sync_driver(mg_enable_state_t* state) {
+    if (state == nullptr || state->driver_synced) return;
+    state->driver_synced = true;
+
+    // Without GL_EXT_multisample_compatibility the application cannot turn
+    // multisampling off anyway -- it is decided by the EGL config -- so reporting
+    // the specification's GL_TRUE on a single-sampled framebuffer would be a lie
+    // in the other direction. Seed it from what the framebuffer actually is, then
+    // track whatever the application sets so enable/disable still round-trips.
+    if (!ext_backing_present(GL_MULTISAMPLE)) {
+        GLint samples = 0;
+        if (GLES.glGetIntegerv) GLES.glGetIntegerv(GL_SAMPLES, &samples);
+        state->scalar[MGC_MULTISAMPLE] = samples > 0 ? GL_TRUE : GL_FALSE;
+    }
+
+    // Most capabilities start out the same in both APIs, so the table and the
+    // driver agree without anyone saying anything. GL_FRAMEBUFFER_SRGB does not:
+    // GL 4.6 starts it disabled, and GL_EXT_sRGB_write_control -- the only thing
+    // that makes it settable on GLES -- specifies GL_TRUE as its initial value.
+    // Left alone, a draw into an SRGB8_ALPHA8 target gets sRGB-encoded while
+    // glIsEnabled(GL_FRAMEBUFFER_SRGB) truthfully reports the table's GL_FALSE.
+    // Push the table's value down so the two agree from the first draw.
+    if (ext_backing_present(GL_FRAMEBUFFER_SRGB) && GLES.glDisable != nullptr) {
+        if (state->scalar[MGC_FRAMEBUFFER_SRGB] == GL_FALSE) {
+            GLES.glDisable(GL_FRAMEBUFFER_SRGB);
+        } else if (GLES.glEnable != nullptr) {
+            GLES.glEnable(GL_FRAMEBUFFER_SRGB);
+        }
+    }
 }
 
 mg_enable_state_t* mg_enable_state(void) {
@@ -408,6 +432,10 @@ extern "C"
             *data = ival != 0 ? GL_TRUE : GL_FALSE;
             return;
         }
+        if (mg_pixel_store_query_int(pname, &ival)) {
+            *data = ival != 0 ? GL_TRUE : GL_FALSE;
+            return;
+        }
         GLES.glGetBooleanv(pname, data);
     }
 
@@ -423,6 +451,10 @@ extern "C"
             *data = static_cast<GLfloat>(ival);
             return;
         }
+        if (mg_pixel_store_query_int(pname, &ival)) {
+            *data = static_cast<GLfloat>(ival);
+            return;
+        }
         GLES.glGetFloatv(pname, data);
     }
 
@@ -435,6 +467,10 @@ extern "C"
             return;
         }
         if (mg_enable_query_int(pname, &ival)) {
+            *data = ival;
+            return;
+        }
+        if (mg_pixel_store_query_int(pname, &ival)) {
             *data = ival;
             return;
         }

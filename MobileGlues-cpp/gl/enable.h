@@ -78,6 +78,7 @@ extern "C"
         GLuint clip_distance_mask;                    // GL_CLIP_DISTANCE0..7
         GLuint primitive_restart_index;               // glPrimitiveRestartIndex
         bool initialised;
+        bool driver_synced;  // mg_enable_sync_driver() has run for this context
     };
 
     // Current table. Today there is one; gl/enable.cpp routes every access
@@ -109,6 +110,13 @@ extern "C"
     GLuint mg_primitive_restart_index_for(GLenum type);
 
     void mg_enable_reset(struct mg_enable_state_t* state);
+
+    // Make the driver agree with the table. Seeds the entries that can only be
+    // answered by asking the driver, and pushes down the ones whose GLES default
+    // is not the GL 4.6 default. Must run with the context current -- which
+    // mg_enable_reset() is not, it runs inside eglCreateContext -- so this is
+    // called from mg_context_make_current(). Runs once per context.
+    void mg_enable_sync_driver(struct mg_enable_state_t* state);
 
 #ifdef __cplusplus
 }

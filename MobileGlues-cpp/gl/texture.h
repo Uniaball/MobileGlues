@@ -42,6 +42,9 @@ extern "C"
     GLAPI GLAPIENTRY void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params);
     GLAPI GLAPIENTRY void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                                           GLsizei height, GLenum format, GLenum type, const void* pixels);
+    GLAPI GLAPIENTRY void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                          GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
+                                          GLenum format, GLenum type, const void* pixels);
     GLAPI GLAPIENTRY void glTexParameteriv(GLenum target, GLenum pname, const GLint* params);
     GLAPI GLAPIENTRY void glBindTexture(GLenum target, GLuint texture);
     GLAPI GLAPIENTRY void glDeleteTextures(GLsizei n, const GLuint* textures);
@@ -96,6 +99,11 @@ public:
     GLsizei height;
     GLsizei depth;
 };
+
+// How many texture units this layer can actually track. Anything the driver
+// offers beyond this the layer cannot honour, so it must not be advertised
+// either -- see the GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS case in gl/getter.cpp.
+int mg_max_texture_units(void);
 
 TextureObject* mgGetTexObjectByID(unsigned texture);
 TextureObject* mgGetTexObjectByTarget(GLenum target);

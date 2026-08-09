@@ -18,10 +18,17 @@
 #define REVISION 8
 #define PATCH 0
 
-#define VERSION_TYPE VERSION_DEVELOPMENT
+#define VERSION_TYPE VERSION_ALPHA
 
 #if VERSION_TYPE == VERSION_RC
 #define VERSION_RC_NUMBER 1
+#endif
+
+// Development builds are numbered for the reason release candidates are: several
+// of them carry the same MAJOR.MINOR.REVISION, and a bug report has to be able to
+// name which one it came from. Bump this whenever a build leaves this machine.
+#if VERSION_TYPE == VERSION_DEVELOPMENT
+#define VERSION_DEV_NUMBER 3
 #endif
 
 #define VERSION_SUFFIX ""

@@ -162,6 +162,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     gl/texture.cpp
     gl/drawing.cpp
     gl/multidraw.cpp
+    bench/multidraw_bench.cpp
     gl/mg.cpp
     gl/buffer.cpp
     gl/getter.cpp
@@ -169,6 +170,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     gl/restart.cpp
     egl/context.cpp
     gl/pixel.cpp
+    gl/transfer.cpp
     gl/random_string_gen.cpp
     gl/ExtWrappers/DSAWrapper.cpp
     gl/ExtWrappers/MultiBindWrapper.cpp
@@ -184,11 +186,11 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     config/config.cpp
     config/gpu_utils.cpp
     config/settings.cpp
+    config/stats.cpp
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ./includes
-    ./3rdparty/glm
     ./3rdparty/xxhash)
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
