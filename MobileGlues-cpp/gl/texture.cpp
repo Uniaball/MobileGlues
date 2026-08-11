@@ -6,6 +6,7 @@
 // End of Source File Header
 
 #include "texture.h"
+#include "../config/settings.h"
 #include "../egl/context.h"
 #include <mutex>
 #include <memory>
@@ -217,6 +218,18 @@ struct texture_group_state_t {
 struct texture_ctx_state_t {
     std::array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> units;
     int current_unit = 0;
+    // What this layer last handed to GLES.glBindTexture / GLES.glActiveTexture,
+    // i.e. the driver's side of the same state `units` and `current_unit` describe
+    // from the application's side. The two are not one table because they answer
+    // different questions and can legitimately differ: the texture-buffer
+    // emulation parks the object on unit 15's GL_TEXTURE_2D while the application
+    // asked for GL_TEXTURE_BUFFER on whichever unit was active, and gl/drawing.cpp
+    // needs to know what is on unit 15 without disturbing the active unit to ask.
+    //
+    // Zero-initialised, which is where GL starts a fresh context: no texture bound
+    // anywhere and GL_TEXTURE0 active.
+    std::array<std::array<GLuint, (int)TextureTarget::TEXTURES_COUNT>, MAX_TEXTURE_IMAGE_UNITS> driver_bindings{};
+    int driver_active_unit = 0;
     // Which share group this context draws its texture objects from. Deleting an
     // object has to clear it out of every context in that group, not only the one
     // that happened to issue the glDeleteTextures.
@@ -269,6 +282,25 @@ void mg_texture_forget_context(unsigned long long ctx_id) {
 #define BufferObjectsVec (g_tg->objects)
 #define TextureUnits (g_tc->units)
 #define CurrentTextureUnitIndex (g_tc->current_unit)
+#define DriverTextureBindings (g_tc->driver_bindings)
+#define DriverActiveTextureUnit (g_tc->driver_active_unit)
+
+// The unit the emulated texture buffer is parked on. glBindTexture and
+// gl/buffer.cpp's glTexBuffer both borrow it and hand the active unit back.
+static const int MG_TEXTURE_BUFFER_EMULATION_UNIT = 15;
+
+static inline bool driver_binding_key_valid(int unit, TextureTarget target) {
+    return unit >= 0 && unit < MAX_TEXTURE_IMAGE_UNITS && (int)target >= 0 &&
+           (int)target < (int)TextureTarget::TEXTURES_COUNT;
+}
+
+static inline void set_driver_texture_binding(int unit, TextureTarget target, GLuint texture) {
+    if (driver_binding_key_valid(unit, target)) DriverTextureBindings[unit][(int)target] = texture;
+}
+
+static inline GLuint get_driver_texture_binding(int unit, TextureTarget target) {
+    return driver_binding_key_valid(unit, target) ? DriverTextureBindings[unit][(int)target] : 0;
+}
 
 void InitTextureMap(size_t expectedSize) {
     BufferObjectsVec.reserve(expectedSize);
@@ -353,6 +385,90 @@ void MarkTextureObjectForDeletion(unsigned texture) {
 }
 
 int mg_max_texture_units(void) { return MAX_TEXTURE_IMAGE_UNITS; }
+
+// Whether the shadow describes the context whose driver state is actually current.
+//
+// g_tex_ctx_default is not a per-context record. It is one object shared by every
+// context this layer never saw created -- mg_texture_bind_context(0, 0) selects it
+// for all of them -- and it is not even thread_local, because
+// MarkTextureObjectForDeletion has to sweep it from whichever thread issued the
+// delete. Two untracked contexts on two threads therefore have one set of shadow
+// values between them and separate driver state each, so a unit or a binding that
+// one of them set would suppress the call the other still needs. Nothing may be
+// skipped on the strength of that record; gl/enable.cpp draws the same line with
+// driver_synced, for the same reason.
+static inline bool driver_shadow_tracks_this_context() { return g_tc != &g_tex_ctx_default; }
+
+// The active unit on its own. FSR1 does not disturb it -- its GLStateGuard saves
+// GL_ACTIVE_TEXTURE from the driver and puts it back -- so this half asks only
+// whether the record belongs to the context that is current.
+static inline bool driver_active_unit_shadow_trustworthy() { return driver_shadow_tracks_this_context(); }
+
+// Whether the shadowed bindings can still be believed.
+//
+// Every internal path that moves a driver texture binding through GLES.* puts it
+// back -- gl/buffer.cpp's glTexBuffer reads unit 15 and rebinds what it read,
+// gl/drawing.cpp only borrows the active unit -- with one exception. FSR1's
+// GLStateGuard saves GL_TEXTURE_BINDING_2D for the unit that was active when it
+// was built, but ApplyFSR then switches to GL_TEXTURE0 and binds the render
+// texture there; the destructor restores the saved unit and rebinds only that
+// one, so with any unit but GL_TEXTURE0 active at swap time unit 0 keeps the FSR1
+// texture and no shadow anywhere records it. That leak is per frame and silent,
+// so while FSR1 is switched on the shadow is declared untrustworthy wholesale
+// rather than for the one pair, which is cheap: the setting is off by default.
+static inline bool driver_texture_shadow_trustworthy() {
+    return driver_shadow_tracks_this_context() && global_settings.fsr1_setting == FSR1_Quality_Preset::Disabled;
+}
+
+int mg_driver_active_texture_unit(void) {
+    if (driver_active_unit_shadow_trustworthy()) return DriverActiveTextureUnit;
+    // Every caller uses this to put the active unit back after borrowing one, so
+    // there is no answering "unknown": a number out of a record that describes some
+    // other context would leave the driver on a unit nobody asked for. Ask the
+    // driver instead. Only reachable for a context this layer never saw created.
+    GLint queried = GL_TEXTURE0;
+    GLES.glGetIntegerv(GL_ACTIVE_TEXTURE, &queried);
+    const int unit = (int)(queried - GL_TEXTURE0);
+    return (unit >= 0 && unit < MAX_TEXTURE_IMAGE_UNITS) ? unit : 0;
+}
+
+bool mg_driver_texture_binding_at_unit(int unit, GLenum target, GLuint* out) {
+    const TextureTarget targetR = ConvertGLEnumToTextureTarget(target);
+    if (!out || !driver_texture_shadow_trustworthy() || !driver_binding_key_valid(unit, targetR)) return false;
+    *out = get_driver_texture_binding(unit, targetR);
+    return true;
+}
+
+bool mg_driver_texture_binding(GLenum target, GLuint* out) {
+    const bool answered = mg_driver_texture_binding_at_unit(DriverActiveTextureUnit, target, out);
+#if GLOBAL_DEBUG
+    // Same debug cross-check as mg_driver_bound_buffer, for the same reason: a
+    // divergence between this shadow and the driver is undetectable in release
+    // and only ever shows up downstream. Checked for the current unit only --
+    // verifying another unit would mean switching the active unit, which is
+    // exactly the disturbance a verification pass must not cause.
+    if (answered && GLES.glGetIntegerv) {
+        GLenum pname = 0;
+        switch (target) {
+        case GL_TEXTURE_2D:        pname = GL_TEXTURE_BINDING_2D; break;
+        case GL_TEXTURE_3D:        pname = GL_TEXTURE_BINDING_3D; break;
+        case GL_TEXTURE_2D_ARRAY:  pname = GL_TEXTURE_BINDING_2D_ARRAY; break;
+        case GL_TEXTURE_CUBE_MAP:  pname = GL_TEXTURE_BINDING_CUBE_MAP; break;
+        default: break;
+        }
+        if (pname != 0) {
+            GLint driver = 0;
+            GLES.glGetIntegerv(pname, &driver);
+            if (static_cast<GLuint>(driver) != *out) {
+                LOG_E("mg_driver_texture_binding(0x%X): shadow says %u but the driver holds %u on unit %d -- "
+                      "something bound a texture without going through the frontend",
+                      target, *out, static_cast<GLuint>(driver), DriverActiveTextureUnit)
+            }
+        }
+    }
+#endif
+    return answered;
+}
 
 TextureObject* mgGetTexObjectByTarget(GLenum target) {
     return GetTextureUnit(GetCurrentTextureUnitIndex())
@@ -1137,8 +1253,26 @@ void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffse
     // Same as glCopyTexImage2D: read from where the frame really is.
     mg_fsr_read_scope_t fsr_read;
 
-    GLint internalFormat;
-    GLES.glGetTexLevelParameteriv(target, level, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+    // The only thing this format decides is depth versus colour, and every entry
+    // point that allocates a level records the format on the object. Asking the
+    // driver instead is a synchronous round trip on a call Minecraft makes per
+    // frame, so ask it only when there is nothing recorded to read.
+    //
+    // The record is not per level, and this call is. Levels of one texture can in
+    // principle be given different formats through glTexImage2D, but not a
+    // different depth-ness: a depth level and a colour level in the same texture
+    // is not a texture any driver will sample.
+    // mgGetTexObjectByTarget indexes the binding slots by the converted enum and
+    // does not range-check it, and TextureTarget::UNKNWON is past the end.
+    GLint internalFormat = 0;
+    TextureObject* copy_dst =
+        ConvertGLEnumToTextureTarget(target) != TextureTarget::UNKNWON ? mgGetTexObjectByTarget(target) : nullptr;
+    if (copy_dst && copy_dst->internal_format != 0) {
+        internalFormat = (GLint)copy_dst->internal_format;
+    } else {
+        GLES.glGetTexLevelParameteriv(target, level, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+        if (copy_dst) copy_dst->internal_format = (GLenum)internalFormat;
+    }
 
     LOG_D("glCopyTexSubImage2D, target: %s, level: %d, xoffset: %d, yoffset: %d, "
           "x: %d, y: %d, width: %d, height: %d",
@@ -1354,18 +1488,61 @@ void glBindTexture(GLenum target, GLuint texture) {
     LOG_D("glBindTexture(%s, %d)", glEnumToString(target), texture)
     INIT_CHECK_GL_ERROR
 
-    if (hardware && gl_state && hardware->emulate_texture_buffer && target == GL_TEXTURE_BUFFER) {
-        GLES.glActiveTexture(GL_TEXTURE0 + 15);
-        GLES.glBindTexture(GL_TEXTURE_2D, texture);
-        GLES.glActiveTexture(GL_TEXTURE0 + gl_state->current_tex_unit);
-    } else {
-        GLES.glBindTexture(target, texture);
-    }
-    CHECK_GL_ERROR_NO_INIT
-
     int currentUnitIndex = GetCurrentTextureUnitIndex();
     auto& currentUnit = GetTextureUnit(currentUnitIndex);
     auto targetR = ConvertGLEnumToTextureTarget(target);
+
+    const bool emulated_buffer_texture =
+        hardware && gl_state && hardware->emulate_texture_buffer && target == GL_TEXTURE_BUFFER;
+    // Where the driver actually keeps this binding, which is not where the
+    // application put it: the emulation parks the buffer texture on unit 15's
+    // GL_TEXTURE_2D. The plain branch lands on whichever unit the driver has
+    // active, which is the driver's own count and not GetCurrentTextureUnitIndex.
+    const int driver_unit = emulated_buffer_texture ? MG_TEXTURE_BUFFER_EMULATION_UNIT : DriverActiveTextureUnit;
+    const TextureTarget driver_target = emulated_buffer_texture ? TextureTarget::TEXTURE_2D : targetR;
+
+    // Rebinding what is already bound is the single most common redundant call
+    // Minecraft makes, and only the driver call is skipped -- everything below
+    // still runs, because the slot record and TextureObject::target are this
+    // layer's own state and a caller may be re-binding to correct them.
+    //
+    // Both halves are required. The frontend half alone would miss the emulation
+    // above writing a driver slot the application never named, and would trust a
+    // slot record that survived a driver-side change. The driver half alone would
+    // skip the bind that repairs a slot record, and would confuse the buffer
+    // texture on unit 15 with an ordinary 2D texture bound there.
+    //
+    // Who else moves driver texture bindings through GLES.*, and whether it nets
+    // to zero: gl/buffer.cpp's glTexBuffer borrows unit 15, reads its
+    // GL_TEXTURE_BINDING_2D and rebinds the value it read, restoring the active
+    // unit on all three of its exits -- zero. gl/drawing.cpp's
+    // setupBufferTextureUniforms only reads unit 15 and restores the active unit --
+    // zero. This function's own emulation branch is recorded below rather than
+    // left to net out. FSR1's GLStateGuard does not net to zero, which is what
+    // driver_texture_shadow_trustworthy() is for -- as is the shared fallback
+    // record, whose values belong to no context in particular. gl/gl.cpp's
+    // depth-clear triangle and the multidraw backends touch no texture state at
+    // all; bench/ is a separate program.
+    bool redundant = false;
+    if (targetR != TextureTarget::UNKNWON && driver_texture_shadow_trustworthy()) {
+        const TextureObject* bound = currentUnit.GetBindingSlot(targetR).GetBoundObject();
+        redundant = bound != nullptr && bound->texture == texture &&
+                    get_driver_texture_binding(driver_unit, driver_target) == texture;
+    }
+
+    if (!redundant) {
+        if (emulated_buffer_texture) {
+            GLES.glActiveTexture(GL_TEXTURE0 + MG_TEXTURE_BUFFER_EMULATION_UNIT);
+            GLES.glBindTexture(GL_TEXTURE_2D, texture);
+            GLES.glActiveTexture(GL_TEXTURE0 + gl_state->current_tex_unit);
+            DriverActiveTextureUnit = (int)gl_state->current_tex_unit;
+        } else {
+            GLES.glBindTexture(target, texture);
+        }
+        set_driver_texture_binding(driver_unit, driver_target, texture);
+    }
+    CHECK_GL_ERROR_NO_INIT
+
     if (targetR == TextureTarget::UNKNWON) {
         LOG_E("glBindTexture: Unknown texture target: %s", glEnumToString(target));
         return;
@@ -1388,6 +1565,16 @@ void glDeleteTextures(GLsizei n, const GLuint* textures) {
 
     for (GLsizei i = 0; i < n; ++i) {
         MarkTextureObjectForDeletion(textures[i]);
+        // Deleting a bound texture resets that binding to 0, in the current context
+        // only, so the driver shadow has to follow or it would keep reporting a
+        // name that no longer exists. The sibling contexts of the share group are
+        // deliberately left alone: GL leaves their bindings as they are.
+        if (textures[i] == 0) continue;
+        for (auto& unit : DriverTextureBindings) {
+            for (GLuint& bound : unit) {
+                if (bound == textures[i]) bound = 0;
+            }
+        }
     }
 }
 
@@ -1405,9 +1592,27 @@ void glActiveTexture(GLenum texture) {
         return;
     }
 
+    const int unit = (int)(texture - GL_TEXTURE0);
     set_gl_state_current_tex_unit(texture - GL_TEXTURE0);
-    GLES.glActiveTexture(texture);
-    ActivateTextureUnit(texture - GL_TEXTURE0);
+
+    // Only the driver call is skipped; both pieces of bookkeeping around it run
+    // either way, so a caller that re-selects the unit it is already on still
+    // leaves this layer's idea of the active unit written.
+    //
+    // Every internal borrower of the active unit hands it back: gl/buffer.cpp's
+    // glTexBuffer and gl/drawing.cpp's setupBufferTextureUniforms both return to
+    // gl_state->current_tex_unit (or to the value they saved, which is the same
+    // number) on every exit including their early ones, FSR1's GLStateGuard
+    // restores GL_ACTIVE_TEXTURE in its destructor, and the emulation branch in
+    // glBindTexture above writes DriverActiveTextureUnit itself rather than
+    // relying on that. So the shadow is only ever consulted where the driver
+    // agrees with it -- as long as it describes this context at all, which for the
+    // shared fallback record it does not, hence the gate.
+    if (!driver_active_unit_shadow_trustworthy() || DriverActiveTextureUnit != unit) {
+        GLES.glActiveTexture(texture);
+        DriverActiveTextureUnit = unit;
+    }
+    ActivateTextureUnit(unit);
     CHECK_GL_ERROR
 }
 

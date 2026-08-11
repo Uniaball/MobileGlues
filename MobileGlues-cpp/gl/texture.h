@@ -109,4 +109,32 @@ TextureObject* mgGetTexObjectByID(unsigned texture);
 TextureObject* mgGetTexObjectByTarget(GLenum target);
 void InitTextureMap(size_t expectedSize);
 
+// The driver's own texture state, tracked as this layer issues it, so a caller
+// that only wants to save and restore a binding does not have to make the driver
+// round trip -- and, for a unit other than the active one, does not have to move
+// the active unit twice just to be allowed to ask.
+//
+// Texture names are not renamed across this boundary, unlike buffer names: what
+// the application binds is what the driver is given. So *out is exactly what
+// GLES.glGetIntegerv(GL_TEXTURE_BINDING_<target>) would report with `unit` active,
+// and it is exactly the value to hand back to glBindTexture to restore.
+//
+// It answers for the driver's slot, which is not always the application's: with
+// hardware->emulate_texture_buffer set, glBindTexture(GL_TEXTURE_BUFFER, t) leaves
+// the driver holding t on unit 15's GL_TEXTURE_2D and nothing on GL_TEXTURE_BUFFER
+// anywhere. Ask for what the driver has, not for what the application asked for.
+//
+// False means the tracked value cannot be trusted right now and nothing was
+// written to *out; the caller has to fall back to asking the driver. That happens
+// while FSR1 is enabled, because its per-frame upscale leaves a texture bound on
+// unit 0 that no shadow records -- see the note on the definition in
+// gl/texture.cpp. Callers must keep their GLES.glGetIntegerv path for this case.
+bool mg_driver_texture_binding(GLenum target, GLuint* out);
+bool mg_driver_texture_binding_at_unit(int unit, GLenum target, GLuint* out);
+
+// Which unit GLES.glActiveTexture was last given. Equal to
+// gl_state->current_tex_unit outside the windows where this layer borrows a unit
+// for its own work; this is the one that is right inside them too.
+int mg_driver_active_texture_unit(void);
+
 #endif

@@ -34,6 +34,12 @@ namespace FSR1_Context {
     extern GLuint g_quadVAO;
     extern GLuint g_quadVBO;
     extern GLuint g_fsrProgram;
+    // Uniform locations of g_fsrProgram, resolved when it is linked and valid for
+    // as long as it lives. -1 for a name the linker dropped, which glUniform*
+    // ignores.
+    extern GLint g_inputTexLoc;
+    extern GLint g_const0Loc;
+    extern GLint g_viewportSizeLoc;
 
     extern GLuint g_targetFBO;
     extern GLuint g_targetTexture;
@@ -49,19 +55,6 @@ namespace FSR1_Context {
     extern bool g_resolutionChanged;
     extern GLsizei g_pendingWidth;
     extern GLsizei g_pendingHeight;
-
-    // Cached uniform state — uploaded to GPU only when dirty.
-    extern GLint g_uInputTexLoc;
-    extern GLint g_uConst0Loc;
-    extern GLint g_uViewportSizeLoc;
-    extern bool g_uniformsDirty;
-    extern GLfloat g_lastConst0[4];
-    extern GLfloat g_lastViewportSize[2];
-
-    // Cached viewport state — glViewport skipped when target dimensions match.
-    extern GLsizei g_lastFsrViewportW;
-    extern GLsizei g_lastFsrViewportH;
-    extern bool g_viewportCacheValid;
 } // namespace FSR1_Context
 
 extern bool fsrInitialized;

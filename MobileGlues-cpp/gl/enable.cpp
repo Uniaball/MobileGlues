@@ -53,7 +53,11 @@ struct cap_desc_t {
 // GL 4.6 initial values are from /docsgl/gl4/glEnable.xhtml. Only GL_DITHER is
 // GL_TRUE by default; GL_MULTISAMPLE is also GL_TRUE per the specification but
 // is seeded from the framebuffer instead, see mg_enable_reset().
-const cap_desc_t k_caps[] = {
+//
+// The order is not cosmetic: find_cap() indexes this array by mg_cap_index, so
+// entry i must be the descriptor for capability i. The static assertions below
+// hold that promise at compile time.
+constexpr cap_desc_t k_caps[] = {
     {GL_BLEND, MGC_BLEND, BK_NATIVE, GL_FALSE, "GL_BLEND"},
     {GL_COLOR_LOGIC_OP, MGC_COLOR_LOGIC_OP, BK_VIRTUAL, GL_FALSE, "GL_COLOR_LOGIC_OP"},
     {GL_CULL_FACE, MGC_CULL_FACE, BK_NATIVE, GL_FALSE, "GL_CULL_FACE"},
@@ -85,12 +89,99 @@ const cap_desc_t k_caps[] = {
      "GL_TEXTURE_CUBE_MAP_SEAMLESS"},
 };
 
-const cap_desc_t* find_cap(GLenum cap) {
-    for (const auto& d : k_caps) {
-        if (d.cap == cap) return &d;
+constexpr int k_cap_count = static_cast<int>(sizeof(k_caps) / sizeof(k_caps[0]));
+
+constexpr bool cap_table_is_ordered_by_index() {
+    for (int i = 0; i < k_cap_count; ++i) {
+        if (static_cast<int>(k_caps[i].index) != i) return false;
     }
-    return nullptr;
+    return true;
 }
+
+static_assert(k_cap_count == MGC_COUNT, "every mg_cap_index needs exactly one descriptor");
+static_assert(cap_table_is_ordered_by_index(), "k_caps must be ordered so k_caps[MGC_X] is the descriptor for X");
+
+// A switch and not a walk of k_caps. This runs on every glEnable/glDisable and,
+// through mg_enable_query(), on every glGetBooleanv/glGetFloatv/glGetDoublev/
+// glGetInteger64v and on the default branch of glGetIntegerv -- so a query for a
+// pname this table does not own used to pay 27 comparisons before falling
+// through to the driver. The case labels are sparse enum values, which the
+// compiler resolves by a decision tree rather than in sequence.
+//
+// The returned pointer is into k_caps exactly as before, so every caller below
+// keeps reading the same descriptor fields. constexpr only so that the assertion
+// underneath can walk the table through it -- a capability added to k_caps but
+// not to this switch would otherwise become silently unknown, warned about once
+// and reported disabled forever.
+constexpr const cap_desc_t* find_cap(GLenum cap) {
+    switch (cap) {
+    case GL_BLEND:
+        return &k_caps[MGC_BLEND];
+    case GL_COLOR_LOGIC_OP:
+        return &k_caps[MGC_COLOR_LOGIC_OP];
+    case GL_CULL_FACE:
+        return &k_caps[MGC_CULL_FACE];
+    case GL_DEBUG_OUTPUT:
+        return &k_caps[MGC_DEBUG_OUTPUT];
+    case GL_DEBUG_OUTPUT_SYNCHRONOUS:
+        return &k_caps[MGC_DEBUG_OUTPUT_SYNCHRONOUS];
+    case GL_DEPTH_CLAMP:
+        return &k_caps[MGC_DEPTH_CLAMP];
+    case GL_DEPTH_TEST:
+        return &k_caps[MGC_DEPTH_TEST];
+    case GL_DITHER:
+        return &k_caps[MGC_DITHER];
+    case GL_FRAMEBUFFER_SRGB:
+        return &k_caps[MGC_FRAMEBUFFER_SRGB];
+    case GL_LINE_SMOOTH:
+        return &k_caps[MGC_LINE_SMOOTH];
+    case GL_MULTISAMPLE:
+        return &k_caps[MGC_MULTISAMPLE];
+    case GL_POLYGON_OFFSET_FILL:
+        return &k_caps[MGC_POLYGON_OFFSET_FILL];
+    case GL_POLYGON_OFFSET_LINE:
+        return &k_caps[MGC_POLYGON_OFFSET_LINE];
+    case GL_POLYGON_OFFSET_POINT:
+        return &k_caps[MGC_POLYGON_OFFSET_POINT];
+    case GL_POLYGON_SMOOTH:
+        return &k_caps[MGC_POLYGON_SMOOTH];
+    case GL_PRIMITIVE_RESTART:
+        return &k_caps[MGC_PRIMITIVE_RESTART];
+    case GL_PRIMITIVE_RESTART_FIXED_INDEX:
+        return &k_caps[MGC_PRIMITIVE_RESTART_FIXED_INDEX];
+    case GL_PROGRAM_POINT_SIZE:
+        return &k_caps[MGC_PROGRAM_POINT_SIZE];
+    case GL_RASTERIZER_DISCARD:
+        return &k_caps[MGC_RASTERIZER_DISCARD];
+    case GL_SAMPLE_ALPHA_TO_COVERAGE:
+        return &k_caps[MGC_SAMPLE_ALPHA_TO_COVERAGE];
+    case GL_SAMPLE_ALPHA_TO_ONE:
+        return &k_caps[MGC_SAMPLE_ALPHA_TO_ONE];
+    case GL_SAMPLE_COVERAGE:
+        return &k_caps[MGC_SAMPLE_COVERAGE];
+    case GL_SAMPLE_MASK:
+        return &k_caps[MGC_SAMPLE_MASK];
+    case GL_SAMPLE_SHADING:
+        return &k_caps[MGC_SAMPLE_SHADING];
+    case GL_SCISSOR_TEST:
+        return &k_caps[MGC_SCISSOR_TEST];
+    case GL_STENCIL_TEST:
+        return &k_caps[MGC_STENCIL_TEST];
+    case GL_TEXTURE_CUBE_MAP_SEAMLESS:
+        return &k_caps[MGC_TEXTURE_CUBE_MAP_SEAMLESS];
+    default:
+        return nullptr;
+    }
+}
+
+constexpr bool every_cap_is_reachable() {
+    for (int i = 0; i < k_cap_count; ++i) {
+        if (find_cap(k_caps[i].cap) != &k_caps[i]) return false;
+    }
+    return true;
+}
+
+static_assert(every_cap_is_reachable(), "find_cap() is missing a case for a capability listed in k_caps");
 
 // Whether the extension backing a BK_EXT capability is present. Checked at use
 // rather than cached, because the caps are filled in during init and a device
@@ -134,6 +225,42 @@ bool is_clip_distance(GLenum cap, GLuint* slot) {
 // layer never saw created (the bootstrap probe context, or one made before the
 // library was loaded).
 mg_enable_state_t g_default_state;
+
+// Whether the table may be trusted to say what the driver already has, which is
+// what lets mg_set_enabled() drop a call the driver would answer with no change.
+//
+// Two things make it untrue, and mg_enable_sync_driver() is the line between
+// them. Before it runs the table is deliberately out of step -- GL_MULTISAMPLE
+// and GL_FRAMEBUFFER_SRGB carry their GL 4.6 values, which are not the ones GLES
+// and GL_EXT_sRGB_write_control start from -- and it never runs for
+// g_default_state, which every context this layer did not create shares. Two
+// such contexts have one table between them but separate driver state, so a
+// value one of them set would suppress the call the other still needs.
+//
+// Rule 4 audit, everything outside this file that reaches GLES.glEnable or
+// GLES.glDisable directly:
+//   gl/restart.cpp, gl/drawing.cpp, gl/multidraw.cpp -- every one of them the
+//     same capability, GL_PRIMITIVE_RESTART_FIXED_INDEX, borrowed for the length
+//     of a draw because GL_PRIMITIVE_RESTART itself is never forwarded. Each site
+//     first asks the table whether it is already on -- through
+//     mg_restart_needs_driver_fixed(), which answers false in that case, or
+//     through mg_enable_get() directly -- and only borrows it when it is off,
+//     switching it back afterwards, the scoped ones from a destructor so an early
+//     return cannot escape it. Net zero against the table either way.
+//   gl/gl.cpp DrawDepthClearTri -- colour mask, depth mask and depth func, each
+//     restored from a value queried first. It enables no capability at all.
+//   gl/FSR1/FSR1.cpp GLStateGuard -- program, VAO, buffers, texture and
+//     framebuffer bindings only, no capability.
+//   bench/multidraw_bench.cpp -- GL_DEPTH_TEST and GL_CULL_FACE enabled with no
+//     matching disable, on a context this layer does track. Real divergence, but
+//     unreachable: it is behind mg_multidraw_bench_run(), which only the plugin
+//     app dlsyms in its own process, and nothing there calls this layer's
+//     glEnable/glDisable afterwards -- the benchmark itself speaks to GLES
+//     directly throughout. No capability is excluded from the filter for it.
+// Nothing in the tree calls GLES.glEnablei or GLES.glDisablei.
+bool table_matches_driver(const mg_enable_state_t* st) {
+    return st->driver_synced;
+}
 
 } // namespace
 
@@ -298,11 +425,13 @@ static void mg_set_enabled(GLenum cap, GLuint index, bool indexed, GLboolean val
             EN_WARN_ONCE("glEnablei/glDisablei: GL_CLIP_DISTANCE%u is not an indexed capability", slot);
             return;
         }
+        const bool was_on = (st->clip_distance_mask & (1u << slot)) != 0;
         if (value)
             st->clip_distance_mask |= (1u << slot);
         else
             st->clip_distance_mask &= ~(1u << slot);
-        if (g_gles_caps.GL_EXT_clip_cull_distance && GLES.glEnable && GLES.glDisable) {
+        const bool redundant = (was_on == (value != GL_FALSE)) && table_matches_driver(st);
+        if (!redundant && g_gles_caps.GL_EXT_clip_cull_distance && GLES.glEnable && GLES.glDisable) {
             if (value)
                 GLES.glEnable(cap);
             else
@@ -327,8 +456,14 @@ static void mg_set_enabled(GLenum cap, GLuint index, bool indexed, GLboolean val
                 EN_WARN_ONCE("glEnablei(GL_BLEND, %u): index is past GL_MAX_DRAW_BUFFERS, ignored", index);
                 return;
             }
+            const GLboolean was = st->blend_indexed[index];
             st->blend_indexed[index] = value;
             if (index == 0) st->scalar[MGC_BLEND] = value;
+            // blend_indexed[] mirrors the driver's per-draw-buffer state one for
+            // one: the scalar path below writes every entry exactly when it tells
+            // the driver to change all of them, so an entry that already holds
+            // this value means the driver does too.
+            if (was == value && table_matches_driver(st)) return;
             if (GLES.glEnablei && GLES.glDisablei) {
                 if (value)
                     GLES.glEnablei(cap, index);
@@ -362,6 +497,22 @@ static void mg_set_enabled(GLenum cap, GLuint index, bool indexed, GLboolean val
         }
     }
 
+    // Read before the table is written over. The scalar alone settles it for
+    // every capability but GL_BLEND: glEnablei can leave one draw buffer
+    // disagreeing with buffer 0, and the scalar form owes the new value to all of
+    // them, so buffer 0 already agreeing does not mean the driver needs nothing.
+    // GL_SCISSOR_TEST has no such case -- only viewport 0 is ever forwarded, the
+    // rest being tracked for the queries alone.
+    bool already_set = st->scalar[d->index] == value;
+    if (already_set && d->cap == GL_BLEND) {
+        for (int i = 0; i < MG_MAX_DRAW_BUFFERS; ++i) {
+            if (st->blend_indexed[i] != value) {
+                already_set = false;
+                break;
+            }
+        }
+    }
+
     st->scalar[d->index] = value;
     if (d->cap == GL_BLEND) {
         for (int i = 0; i < MG_MAX_DRAW_BUFFERS; ++i) st->blend_indexed[i] = value;
@@ -370,14 +521,23 @@ static void mg_set_enabled(GLenum cap, GLuint index, bool indexed, GLboolean val
         for (int i = 0; i < MG_MAX_VIEWPORTS; ++i) st->scissor_indexed[i] = value;
     }
 
-    if (forwards_to_driver(*d)) {
-        if (value)
-            GLES.glEnable(cap);
-        else
-            GLES.glDisable(cap);
-    } else {
+    if (!forwards_to_driver(*d)) {
         LOG_D("%s is tracked but not forwarded (no GLES equivalent)", d->name)
+        return;
     }
+
+    // A renderer brackets nearly every pass with GL_BLEND, GL_DEPTH_TEST,
+    // GL_CULL_FACE and GL_SCISSOR_TEST, usually setting the value already in
+    // force. The table knows that without asking, and the driver call is not free
+    // even when it changes nothing: it crosses into the driver and, under ANGLE,
+    // into a second translation layer. The bookkeeping above still runs, so only
+    // the call is dropped and never a recorded value.
+    if (already_set && table_matches_driver(st)) return;
+
+    if (value)
+        GLES.glEnable(cap);
+    else
+        GLES.glDisable(cap);
 }
 
 extern "C"

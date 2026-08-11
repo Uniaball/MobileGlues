@@ -12,8 +12,12 @@
 #define DEBUG 0
 
 void glBindTextures(GLuint first, GLsizei count, const GLuint* textures) {
-    GLuint prevUnit;
-    glGetIntegerv(GL_ACTIVE_TEXTURE, reinterpret_cast<GLint*>(&prevUnit));
+    // The unit the driver is on, tracked as this layer issues glActiveTexture.
+    // GL_ACTIVE_TEXTURE has no case in this layer's glGetIntegerv, so asking for it
+    // walks the whole switch and then round trips to the driver for a number that
+    // is already known. Every bind below goes through this layer's glActiveTexture,
+    // which keeps that number written, so it is still right when it is handed back.
+    const GLenum prevUnit = GL_TEXTURE0 + static_cast<GLuint>(mg_driver_active_texture_unit());
     for (GLsizei i = 0; i < count; ++i) {
         // ARB_multi_bind allows 'textures' itself to be NULL, and allows any entry to
         // be zero; both mean "unbind these units". The spec unbinds every target on the

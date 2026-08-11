@@ -48,5 +48,37 @@ bool mg_pixel_store_query_int(GLenum pname, GLint* out);
 bool mg_unpack_swaps_bytes(GLenum type);
 bool mg_pack_swaps_bytes(GLenum type);
 
+// The unpack pixel-store parameters GLES *does* have, mirrored so a transfer that
+// has to reason about the source layout does not pay a driver round trip per
+// upload for each of them.
+//
+// The mirror cannot drift while it is valid: every one of these reaches the
+// driver through the frontend glPixelStorei, which passes through
+// mg_pixel_store_set below before forwarding, so recording and forwarding are the
+// same event. The paths that change them behind that back -- gl/transfer.cpp for
+// the length of one conversion, the glTexBuffer emulation in gl/buffer.cpp -- put
+// back what they found.
+//
+// What it cannot see is eglMakeCurrent. The driver's pixel-store block is per
+// context and swapping it is invisible from here, so the mirror belongs to the
+// gl_state it was taken against and mg_unpack_state() answers false for any
+// other. False is not a failure: it is the caller's instruction to ask the driver
+// for all six and hand the answer back through mg_unpack_state_adopt(), which is
+// where the mirror comes from in the first place.
+struct mg_unpack_state_t {
+    // GL 4.6 table 23.9: an alignment of 4, everything else 0. This is also what a
+    // context starts with, so the initialiser is the correct answer for a driver
+    // nobody has spoken to yet.
+    GLint alignment = 4;    // GL_UNPACK_ALIGNMENT
+    GLint row_length = 0;   // GL_UNPACK_ROW_LENGTH
+    GLint skip_rows = 0;    // GL_UNPACK_SKIP_ROWS
+    GLint skip_pixels = 0;  // GL_UNPACK_SKIP_PIXELS
+    GLint image_height = 0; // GL_UNPACK_IMAGE_HEIGHT
+    GLint skip_images = 0;  // GL_UNPACK_SKIP_IMAGES
+};
+
+bool mg_unpack_state(mg_unpack_state_t* out);
+void mg_unpack_state_adopt(const mg_unpack_state_t& values);
+
 
 #endif // MOBILEGLUES_PIXEL_H

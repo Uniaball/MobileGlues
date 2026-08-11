@@ -293,6 +293,71 @@ GLuint find_bound_buffer_by_target(GLenum target) {
     return idx >= 0 ? g_bound_buffers_arr[idx] : 0;
 }
 
+// The name the *driver* has bound to `target`, i.e. what
+// GLES.glGetIntegerv(<target>_BINDING) would answer, worked out from the tracked
+// bindings rather than by asking the driver.
+//
+// Buffer names are renamed across this boundary: the application sees names
+// gen_buffer() hands out and the driver sees the ones glGenBuffers gave back, so
+// find_bound_buffer_by_target's answer must not be passed to GLES.glBindBuffer
+// unmapped. This one may. A name the application bound without ever generating it
+// is forwarded verbatim by glBindBuffer -- GLES creates the object on first bind
+// -- so it is its own driver name.
+//
+// Two limits, both shared with this layer's own glGetIntegerv:
+//   - It reports the last name bound to the target, and glDeleteBuffers does not
+//     clear the binding slots (only GL_PARAMETER_BUFFER, which has no driver-side
+//     binding to fall back on). Deleting a still-bound buffer resets the driver's
+//     binding to 0 while this keeps reporting the dead name.
+//   - It is the tracked state, so it is only the driver's state where the two
+//     agree. Every internal path that binds GL_ELEMENT_ARRAY_BUFFER or
+//     GL_DRAW_INDIRECT_BUFFER through GLES.* directly (gl/multidraw.cpp,
+//     gl/drawing.cpp, gl/restart.cpp) saves and restores around its own work, so
+//     they disagree only inside those windows -- ask before the temporary bind,
+//     never during it. gl/gl.cpp's depth-clear triangle is the one path that does
+//     not: it leaves the driver on vertex array 0 and GL_ARRAY_BUFFER 0 without
+//     putting the application's back, which desynchronises the element array
+//     binding too, since that is vertex array state.
+//
+// GL_PARAMETER_BUFFER has no GLES binding at all; the mapped name is returned for
+// it anyway, because gl/multidraw.cpp is the only thing that asks and it needs the
+// real object to bind somewhere else.
+GLuint mg_driver_bound_buffer(GLenum target) {
+    const GLuint name = find_bound_buffer_by_target(target);
+    const GLuint real = (name == 0 || !has_buffer(name)) ? name : find_real_buffer(name);
+#if GLOBAL_DEBUG
+    // The divergence this answer is vulnerable to -- driver state mutated
+    // behind the frontend's back -- is undetectable at runtime: the tracked
+    // state always has an answer and cannot know it is stale. So debug builds
+    // pay the round-trip this function exists to avoid, and scream on a
+    // mismatch instead of letting a wrong binding surface three calls later as
+    // a skipped draw or a corrupted restore. Release builds trust the tracking.
+    if (GLES.glGetIntegerv) {
+        GLenum pname = 0;
+        switch (target) {
+        case GL_ARRAY_BUFFER:          pname = GL_ARRAY_BUFFER_BINDING; break;
+        case GL_ELEMENT_ARRAY_BUFFER:  pname = GL_ELEMENT_ARRAY_BUFFER_BINDING; break;
+        case GL_DRAW_INDIRECT_BUFFER:  pname = GL_DRAW_INDIRECT_BUFFER_BINDING; break;
+        case GL_PIXEL_UNPACK_BUFFER:   pname = GL_PIXEL_UNPACK_BUFFER_BINDING; break;
+        case GL_PIXEL_PACK_BUFFER:     pname = GL_PIXEL_PACK_BUFFER_BINDING; break;
+        case GL_COPY_READ_BUFFER:      pname = GL_COPY_READ_BUFFER_BINDING; break;
+        case GL_COPY_WRITE_BUFFER:     pname = GL_COPY_WRITE_BUFFER_BINDING; break;
+        default: break;
+        }
+        if (pname != 0) {
+            GLint driver = 0;
+            GLES.glGetIntegerv(pname, &driver);
+            if (static_cast<GLuint>(driver) != real) {
+                LOG_E("mg_driver_bound_buffer(0x%X): tracked %u (real %u) but the driver holds %u -- "
+                      "something mutated this binding without going through the frontend",
+                      target, name, real, static_cast<GLuint>(driver))
+            }
+        }
+    }
+#endif
+    return real;
+}
+
 GLuint find_bound_buffer(GLenum key) {
     if (key == GL_ELEMENT_ARRAY_BUFFER_BINDING) {
         return g_cached_ibo;

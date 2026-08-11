@@ -129,11 +129,19 @@ GLenum GetBindingQuery(GLenum target, bool forceTexture = false) {
 // buffer
 static thread_local ska::flat_hash_map<GLenum, std::vector<GLuint>> bufferBindingStack;
 void temporarilyBindBuffer(GLuint bufferID, GLenum target = GL_ARRAY_BUFFER) {
-    GLenum bindingQuery = GetBindingQuery(target);
-    GLint prev = 0;
-    glGetIntegerv(bindingQuery, &prev);
+    // The same number glGetIntegerv(<target>_BINDING) was being asked for -- this
+    // layer's glGetIntegerv answers every buffer binding out of exactly this
+    // record -- without walking its switch to get there.
+    //
+    // It has to be the frontend name, so mg_driver_bound_buffer is the wrong
+    // accessor here: the restore below goes back through this layer's glBindBuffer,
+    // which maps to the driver name itself and re-tracks the target under whatever
+    // it was handed. Feeding it an already-mapped name would record a name the
+    // application never used, and could land on a live frontend object that happens
+    // to share the number.
+    const GLuint prev = find_bound_buffer_by_target(target);
     // Push prev even when it is already bound: restore always pops once, and rebinding the same object is a no-op.
-    bufferBindingStack[target].push_back(static_cast<GLuint>(prev));
+    bufferBindingStack[target].push_back(prev);
 
     LOG_D("[DSA] [TempBind] target=0x%X, prev=%u -> bind=%u", target, prev, bufferID);
     CHECK_GL_ERROR;
@@ -163,7 +171,12 @@ void restoreTemporaryBufferBinding(GLenum target = GL_ARRAY_BUFFER) {
     glBindBuffer(target, toRestore);
     CHECK_GL_ERROR_NO_INIT;
 
-    if (it->second.empty()) bufferBindingStack.erase(it);
+    // The emptied entry stays. Erasing it destroys the vector, so the next
+    // temporary bind on this target pays a fresh allocation and a hash insert to
+    // put back what was just thrown away -- and these pairs hardly ever nest, so
+    // "just emptied" is the state at the end of nearly every DSA call. Keeping it
+    // cannot grow without bound either: the keys are the handful of bind targets
+    // this file ever names.
 }
 
 void glCreateBuffers(GLsizei n, GLuint* buffers) {
@@ -474,7 +487,9 @@ void restoreTemporaryFramebufferBinding(GLenum target = GL_DRAW_FRAMEBUFFER) {
     CHECK_GL_ERROR;
     glBindFramebuffer(target, toRestore);
     CHECK_GL_ERROR_NO_INIT;
-    if (it->second.empty()) framebufferBindingStack.erase(it);
+    // Emptied entries are kept, for the reason spelled out in
+    // restoreTemporaryBufferBinding: the vector's capacity is what makes the next
+    // call free, and there are only ever three keys here.
 }
 
 void glCreateFramebuffers(GLsizei n, GLuint* framebuffers) {
@@ -803,7 +818,8 @@ void restoreTemporaryRenderbufferBinding() {
     CHECK_GL_ERROR;
     glBindRenderbuffer(GL_RENDERBUFFER, toRestore);
     CHECK_GL_ERROR_NO_INIT;
-    if (it->second.empty()) renderbufferBindingStack.erase(it);
+    // Kept for the reason restoreTemporaryBufferBinding gives. There is exactly one
+    // key in this map.
 }
 
 void glCreateRenderbuffers(GLsizei n, GLuint* renderbuffers) {
@@ -905,19 +921,42 @@ GLenum GetTexTarget(GLuint texture) {
 // error GL specifies and touch nothing.
 bool mgRejectUnknownTexture(const char* what, GLuint texture, GLenum target) {
     if (target != 0) return false;
-    LOG_W_FORCE("[DSA] %s: %u is not a texture name this layer knows about", what, texture);
+    // An application that keeps a stale name in a per-frame path hits this twice
+    // per operation -- once for the operation's own check and once inside
+    // temporarilyBindTexture -- through LOG_W_FORCE, which no build configuration
+    // silences. The first line says everything the hundredth would, so latch it the
+    // way the rest of this file does.
+    DSA_WARN_ONCE("[DSA] %s: %u is not a texture name this layer knows about (reported once)", what, texture);
     mg_set_gl_error(GL_INVALID_OPERATION);
     return true;
 }
 
+// possibleTarget lets a caller that has already resolved the name pass its answer
+// in; GetTexTarget is a table lookup plus an enum conversion and the bind/restore
+// pair would otherwise repeat it. Passing it also pins the target across the
+// operation, so the restore pops the stack entry the bind pushed even if what the
+// object records in between has moved.
 void temporarilyBindTexture(GLuint textureID, GLenum possibleTarget = 0) {
     GLenum target = possibleTarget ? possibleTarget : GetTexTarget(textureID);
     if (mgRejectUnknownTexture("temporarilyBindTexture", textureID, target)) return;
-    GLenum bindingQuery = GetBindingQuery(target, true);
-    GLint prev = 0;
-    glGetIntegerv(bindingQuery, &prev);
+    // Texture names are not renamed across this boundary, so the tracked driver
+    // binding is both what glGetIntegerv(<target>_BINDING) would report and what
+    // the restore below has to hand to glBindTexture. It answers for the driver's
+    // active unit, which is the unit that glBindTexture will restore onto: the two
+    // only differ inside this layer's own borrow windows, and a DSA entry point is
+    // never called from inside one.
+    //
+    // False means the shadow cannot be believed at all right now -- FSR1 leaks a
+    // binding on unit 0 once a frame -- and then there is no substitute for asking
+    // the driver.
+    GLuint prev = 0;
+    if (!mg_driver_texture_binding(target, &prev)) {
+        GLint queried = 0;
+        glGetIntegerv(GetBindingQuery(target, true), &queried);
+        prev = static_cast<GLuint>(queried);
+    }
     // Push prev even when it is already bound: restore always pops once, and rebinding the same object is a no-op.
-    textureBindingStack[target].push_back(static_cast<GLuint>(prev));
+    textureBindingStack[target].push_back(prev);
     LOG_D("[DSA] [TempBind] target=0x%X, prev=%u -> bind=%u", target, prev, textureID);
     CHECK_GL_ERROR;
     glBindTexture(target, textureID);
@@ -953,9 +992,9 @@ void restoreTemporaryTextureBinding(GLuint textureID, GLenum possibleTarget = 0)
     glBindTexture(target, toRestore);
     CHECK_GL_ERROR_NO_INIT;
 
-    if (stackIt->second.empty()) {
-        textureBindingStack.erase(stackIt);
-    }
+    // Kept for the reason restoreTemporaryBufferBinding gives, and it matters most
+    // here: the texture entry points are the ones a frame actually repeats, and the
+    // keys are the few targets textures are bound to.
 }
 
 void glCreateTextures(GLenum target, GLsizei n, GLuint* textures) {
@@ -992,10 +1031,14 @@ void glTextureBuffer(GLuint texture, GLenum internalformat, GLuint buffer) {
         // return;
     }
 
-    temporarilyBindTexture(texture);
+    // Resolved once for both halves; 0 for a name this layer does not know, which
+    // temporarilyBindTexture rejects and restoreTemporaryTextureBinding then leaves
+    // alone.
+    const GLenum target = GetTexTarget(texture);
+    temporarilyBindTexture(texture, target);
     glTexBuffer(GL_TEXTURE_BUFFER, internalformat, buffer);
     CHECK_GL_ERROR;
-    restoreTemporaryTextureBinding(texture);
+    restoreTemporaryTextureBinding(texture, target);
 
     LOG_D("[DSA] Set buffer for texture %u with internal format 0x%X", texture, internalformat);
 }
@@ -1010,25 +1053,30 @@ void glTextureBufferRange(GLuint texture, GLenum internalformat, GLuint buffer, 
         // return;
     }
 
-    temporarilyBindTexture(texture);
+    const GLenum target = GetTexTarget(texture);
+    temporarilyBindTexture(texture, target);
     glTexBufferRange(GL_TEXTURE_BUFFER, internalformat, buffer, offset, size);
     CHECK_GL_ERROR;
-    restoreTemporaryTextureBinding(texture);
+    restoreTemporaryTextureBinding(texture, target);
 
     LOG_D("[DSA] Set buffer range for texture %u with internal format 0x%X and size %lld at offset %lld", texture,
           internalformat, size, offset);
 }
 
+// `target` is resolved once and handed to both halves. It used to be worked out
+// three times per operation -- here, in temporarilyBindTexture and again in
+// restoreTemporaryTextureBinding -- from a name whose record cannot change while
+// the operation between them runs.
 #define TEXTURE_OP_FUNC_BEGIN(func_name)                                                                               \
     LOG()                                                                                                              \
     LOG_D(#func_name ", texture: %u", texture);                                                                        \
     GLenum target = GetTexTarget(texture);                                                                             \
     if (mgRejectUnknownTexture(#func_name, texture, target)) return;                                                   \
-    temporarilyBindTexture(texture);
+    temporarilyBindTexture(texture, target);
 
 #define TEXTURE_OP_FUNC_END                                                                                            \
     CHECK_GL_ERROR;                                                                                                    \
-    restoreTemporaryTextureBinding(texture);
+    restoreTemporaryTextureBinding(texture, target);
 
 void glTextureStorage1D(GLuint texture, GLsizei levels, GLenum internalformat, GLsizei width) {
     TEXTURE_OP_FUNC_BEGIN(glTextureStorage1D)
@@ -1213,24 +1261,41 @@ void glBindTextureUnit(GLuint unit, GLuint texture) {
     // out-of-range unit fell through to glActiveTexture(GL_TEXTURE0 + unit) and
     // bound the texture somewhere the layer does not track. GL 4.5 asks for
     // GL_INVALID_VALUE.
-    GLint maxUnits = 0;
-    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
-    if (maxUnits <= 0) maxUnits = 16;
+    //
+    // The limit itself is a device property capped by this layer's own maximum
+    // (see the GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS case in gl/getter.cpp), so it
+    // cannot change under a running process and is worth asking for exactly once.
+    // Two threads arriving together both write the same value, so the unguarded
+    // initialisation is harmless.
+    static GLint maxUnits = 0;
+    if (maxUnits == 0) {
+        glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+        if (maxUnits <= 0) maxUnits = 16;
+    }
     if (unit >= static_cast<GLuint>(maxUnits)) {
         LOG_W_FORCE("[DSA] glBindTextureUnit: unit %u is past the %d this layer tracks", unit, maxUnits);
         mg_set_gl_error(GL_INVALID_VALUE);
         return;
     }
 
-    GLint prevUnit = 0;
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+    // The unit the driver is on, tracked as this layer issues glActiveTexture,
+    // rather than a GL_ACTIVE_TEXTURE round trip -- this layer's glGetIntegerv has
+    // no case for that enum and hands it straight to the driver. It agrees with
+    // gl_state->current_tex_unit at an application entry point; the windows where
+    // the two differ are all inside this layer, and none of them calls a DSA
+    // wrapper.
+    const GLenum prevUnit = GL_TEXTURE0 + static_cast<GLuint>(mg_driver_active_texture_unit());
+    // Binding onto the unit already selected: both glActiveTexture calls would be
+    // round trips that change nothing, and the pair is the whole cost of this
+    // function for the texture != 0 case.
+    const bool sameUnit = prevUnit == GL_TEXTURE0 + unit;
 
     if (texture == 0) {
         // A valid unbind, and the one call in this file that was guaranteed to
         // crash: there is no record for name 0 to read a target out of. GL 4.5
         // says zero "resets each of the targets to its default texture", so undo
         // them all rather than guessing which one the unit was holding.
-        glActiveTexture(GL_TEXTURE0 + unit);
+        if (!sameUnit) glActiveTexture(GL_TEXTURE0 + unit);
         static const GLenum k_unbind_targets[] = {GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_2D_ARRAY,
                                                   GL_TEXTURE_CUBE_MAP};
         for (GLenum t : k_unbind_targets) {
@@ -1239,16 +1304,16 @@ void glBindTextureUnit(GLuint unit, GLuint texture) {
         if (hardware != nullptr && hardware->es_version >= 310) {
             glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
         }
-        glActiveTexture(prevUnit);
+        if (!sameUnit) glActiveTexture(prevUnit);
         LOG_D("[DSA] Unbound texture unit %u", unit);
         return;
     }
 
     GLenum target = GetTexTarget(texture);
     if (mgRejectUnknownTexture("glBindTextureUnit", texture, target)) return;
-    glActiveTexture(GL_TEXTURE0 + unit);
+    if (!sameUnit) glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(target, texture);
-    glActiveTexture(prevUnit);
+    if (!sameUnit) glActiveTexture(prevUnit);
     LOG_D("[DSA] Bound texture %u to texture unit %u", texture, unit);
 }
 

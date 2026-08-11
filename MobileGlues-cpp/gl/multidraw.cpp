@@ -663,15 +663,18 @@ static bool prepare_indirect_buffer(const GLsizei* counts, GLenum type, const vo
     // client-side pointer would be turned into a nonsense firstIndex and the
     // whole batch would disappear without a word. The drawelements and compute
     // paths already made this check.
-    GLint bound_ibo = 0;
-    GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &bound_ibo);
+    //
+    // Both bindings come from the tracked state (mg_driver_bound_buffer, gl/buffer.h)
+    // rather than from the driver. It answers with the driver-side name, which is
+    // what `prev` must be for the restore, and both are read here at the entry of
+    // the function, before it binds the command buffer over one of them.
+    const GLuint bound_ibo = mg_driver_bound_buffer(GL_ELEMENT_ARRAY_BUFFER);
     if (bound_ibo == 0) {
         MD_WARN_ONCE("multidraw: indirect path needs a bound element array buffer, falling back");
         return false;
     }
 
-    GLuint prev = 0;
-    GLES.glGetIntegerv(GL_DRAW_INDIRECT_BUFFER_BINDING, reinterpret_cast<GLint*>(&prev));
+    const GLuint prev = mg_driver_bound_buffer(GL_DRAW_INDIRECT_BUFFER);
     *out_prev_binding = prev;
 
     if (!g_indirect_cmds_inited) {
@@ -775,14 +778,21 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
     const bool force_fixed = restart_enabled && mg_enable_get(GL_PRIMITIVE_RESTART_FIXED_INDEX, 0) != GL_TRUE;
     if (force_fixed) GLES.glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
 
-    GLint prevElementBuffer = 0;
-    GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevElementBuffer);
+    // Tracked rather than queried, and read before the loop below starts swapping
+    // the scratch buffer in: mg_driver_bound_buffer answers with the driver-side
+    // name, which is what every glBindBuffer here is handed.
+    const GLuint prevElementBuffer = mg_driver_bound_buffer(GL_ELEMENT_ARRAY_BUFFER);
 
     // One persistent scratch buffer instead of glGenBuffers/glDeleteBuffers per
     // sub-draw.
     if (!g_scratch_ibo) GLES.glGenBuffers(1, &g_scratch_ibo);
 
-    std::vector<GLuint> rebased;
+    // Grown but never shrunk, and thread_local for the same reason `staged` above
+    // is. Only the first `count` elements of any one sub-draw are written and
+    // uploaded, so what a wider sub-draw left behind is never read; sizing it to
+    // each count in turn would zero-fill a range mg_rebase_indices_to_u32
+    // overwrites in full immediately after.
+    static thread_local std::vector<GLuint> rebased;
 
     for (GLsizei i = 0; i < primcount; ++i) {
         const GLsizei count = counts[i];
@@ -790,7 +800,7 @@ void mg_glMultiDrawElementsBaseVertex_drawelements(GLenum mode, GLsizei* counts,
 
         const GLint bv = basevertex ? basevertex[i] : 0;
 
-        rebased.resize(static_cast<size_t>(count));
+        if (rebased.size() < static_cast<size_t>(count)) rebased.resize(static_cast<size_t>(count));
 
         if (prevElementBuffer != 0) {
             GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevElementBuffer);
@@ -1424,8 +1434,11 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         g_compute_inited = true;
     }
 
-    GLint ibo = 0;
-    GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &ibo);
+    // Tracked rather than queried. This is read at the point the pipeline objects
+    // have only just been created and nothing has been bound yet, and the value is
+    // both a shader storage source and the binding restored at the very end, so it
+    // has to be the driver-side name -- which is what mg_driver_bound_buffer gives.
+    const GLuint ibo = mg_driver_bound_buffer(GL_ELEMENT_ARRAY_BUFFER);
     if (ibo == 0) {
         LOG_D("multidraw compute: no element array buffer bound, fallback")
         md_fall_elements_bv(md_backend_t::Compute, mode, counts, type, indices, primcount, basevertex);
@@ -1501,6 +1514,12 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
 
     prepareForDraw();
 
+    // Deliberately a driver query, unlike the element array binding above. GL
+    // makes glBindBufferBase/Range set the generic binding as well as the indexed
+    // one, and gl/buffer.cpp's glBindBufferBase does not record that, so the
+    // tracked GL_SHADER_STORAGE_BUFFER slot is stale for any application that uses
+    // indexed shader storage bindings at all -- restoring it would clobber the
+    // binding rather than put it back.
     GLint prev_ssbo_binding = 0;
     GLES.glGetIntegerv(GL_SHADER_STORAGE_BUFFER_BINDING, &prev_ssbo_binding);
 
@@ -1579,11 +1598,16 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
         GLES.glBindBuffer(GL_SHADER_STORAGE_BUFFER, prev_ssbo_binding);
     };
 
-    GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLuint>(ibo));
+    GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ibo);
     GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, g_drawcmd_ssbo);
     GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, g_prefixsumbuffer);
     GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, g_outputibo);
 
+    // Both stay driver queries. gl/gl.cpp's ANGLE depth-clear triangle leaves the
+    // driver on program 0 and, the first time it runs in a context, on
+    // GL_ARRAY_BUFFER 0, without putting the application's back -- so the tracked
+    // program and array buffer can both name something the driver is not holding,
+    // and these two values are written back to the driver rather than merely read.
     GLint prev_program = 0;
     GLES.glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
     GLint prev_vb = 0;
@@ -1638,7 +1662,7 @@ GLAPI GLAPIENTRY void mg_glMultiDrawElementsBaseVertex_compute(GLenum mode, GLsi
     GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_outputibo);
     GLES.glDrawElements(mode, static_cast<GLsizei>(total_indices), GL_UNSIGNED_INT, nullptr);
 
-    GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLuint>(ibo));
+    GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 }
 
 void mg_glMultiDrawElements_compute(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
@@ -1746,8 +1770,11 @@ static bool prepare_arrays_indirect_buffer(const GLint* first, const GLsizei* co
                                            GLuint* out_prev_binding) {
     if (drawcount <= 0) return false;
 
-    GLuint prev = 0;
-    GLES.glGetIntegerv(GL_DRAW_INDIRECT_BUFFER_BINDING, reinterpret_cast<GLint*>(&prev));
+    // Tracked, and read at entry before the command buffer is bound over it.
+    // Nothing outside gl/buffer.cpp ever binds GL_DRAW_INDIRECT_BUFFER except this
+    // file, and every one of those binds is restored, so the tracked name and the
+    // driver's cannot drift apart for this target.
+    const GLuint prev = mg_driver_bound_buffer(GL_DRAW_INDIRECT_BUFFER);
     *out_prev_binding = prev;
 
     if (!g_arrays_indirectbuffer) {
@@ -1814,6 +1841,12 @@ void mg_glMultiDrawArrays_multiindirect(GLenum mode, const GLint* first, const G
     // every enabled array to be buffer-backed. The next rung in the user's order
     // (multiarrays or the unrolled loop) is legal with VAO 0, so this check
     // decides between them rather than reporting an error.
+    //
+    // Asked of the driver on purpose: the question is whether the *driver* is in a
+    // state that permits an indirect draw, and gl/gl.cpp's depth-clear triangle
+    // leaves it on vertex array 0 while find_bound_array() still names the
+    // application's. Trusting the tracked name there would issue a draw GLES
+    // rejects and take the fallback away.
     GLint vao = 0;
     GLES.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
     if (vao == 0) {
@@ -2077,8 +2110,10 @@ static bool mg_indirect_count(GLenum mode, GLenum type, bool is_elements, const 
         MD_WARN_ONCE("multidraw count: no GL_PARAMETER_BUFFER bound, nothing drawn");
         return false;
     }
-    GLint src_bound = 0;
-    GLES.glGetIntegerv(GL_DRAW_INDIRECT_BUFFER_BINDING, &src_bound);
+    // Tracked, like the parameter buffer above: this ends up as a shader storage
+    // source and as a bind target, so it has to be the driver-side name, and
+    // nothing has been bound yet at this point.
+    const GLuint src_bound = mg_driver_bound_buffer(GL_DRAW_INDIRECT_BUFFER);
     if (src_bound == 0) {
         MD_WARN_ONCE("multidraw count: no GL_DRAW_INDIRECT_BUFFER bound, nothing drawn");
         return false;
@@ -2088,10 +2123,14 @@ static bool mg_indirect_count(GLenum mode, GLenum type, bool is_elements, const 
     // it. Reading GL_SHADER_STORAGE_BUFFER_BINDING after the scratch sizing block
     // had already bound and unbound the scratch buffer would have recorded 0 and
     // then "restored" that, silently clearing the application's binding.
-    GLint prev_ssbo = 0, prev_program = 0, prev_indirect = 0;
+    //
+    // The first two stay driver queries for the reasons given in the compute path:
+    // the tracked generic shader storage binding does not see glBindBufferBase, and
+    // the tracked current program does not see gl/gl.cpp's depth-clear triangle.
+    GLint prev_ssbo = 0, prev_program = 0;
     GLES.glGetIntegerv(GL_SHADER_STORAGE_BUFFER_BINDING, &prev_ssbo);
     GLES.glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
-    GLES.glGetIntegerv(GL_DRAW_INDIRECT_BUFFER_BINDING, &prev_indirect);
+    const GLuint prev_indirect = mg_driver_bound_buffer(GL_DRAW_INDIRECT_BUFFER);
     GLint prev_base[3] = {};
     GLint64 prev_start[3] = {}, prev_size[3] = {};
     for (int i = 0; i < 3; ++i) {
@@ -2121,7 +2160,7 @@ static bool mg_indirect_count(GLenum mode, GLenum type, bool is_elements, const 
                               static_cast<uint64_t>(maxdrawcount - 1) * static_cast<uint64_t>(src_stride) +
                               static_cast<uint64_t>(cmd_bytes);
     GLint src_size = 0;
-    GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>(src_bound));
+    GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, src_bound);
     GLES.glGetBufferParameteriv(GL_DRAW_INDIRECT_BUFFER, GL_BUFFER_SIZE, &src_size);
     if (src_size < 0 || src_span > static_cast<uint64_t>(src_size)) {
         MD_WARN_ONCE("multidraw count: commands run past the end of the indirect buffer (%llu > %d), nothing drawn",
@@ -2163,7 +2202,7 @@ static bool mg_indirect_count(GLenum mode, GLenum type, bool is_elements, const 
     }
     GLES.glBindBuffer(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(prev_ssbo));
 
-    GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLuint>(src_bound));
+    GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, src_bound);
     GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, param_real);
     GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, g_count_scratch);
 
@@ -2212,11 +2251,11 @@ static bool mg_indirect_count(GLenum mode, GLenum type, bool is_elements, const 
         }
     } else {
         MD_WARN_ONCE("multidraw count: no indirect draw entry point, nothing drawn");
-        GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>(prev_indirect));
+        GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, prev_indirect);
         return false;
     }
 
-    GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>(prev_indirect));
+    GLES.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, prev_indirect);
     return true;
 }
 

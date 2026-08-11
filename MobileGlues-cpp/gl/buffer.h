@@ -46,6 +46,16 @@ extern "C"
     GLAPI GLAPIENTRY void bindAllAtomicCounterAsSSBO(void);
     GLAPI GLAPIENTRY void restoreAtomicCounterAsSSBO(void);
 
+    // The real/driver name bound to target, as GLES.glGetIntegerv(<target>_BINDING)
+    // would report it -- the two functions above answer with this layer's own
+    // names, which the driver has never heard of. Computed from tracked state, so
+    // it costs nothing and is safe to call per draw, and it is the value to hand
+    // straight back to GLES.glBindBuffer when restoring a temporary bind.
+    //
+    // Only valid where the driver's binding still agrees with the tracked one; the
+    // comment on the definition in gl/buffer.cpp lists where it does not.
+    GLuint mg_driver_bound_buffer(GLenum target);
+
     GLuint gen_array();
 
     GLboolean has_array(GLuint key);

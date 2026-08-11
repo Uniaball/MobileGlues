@@ -6,6 +6,7 @@
 // End of Source File Header
 
 #include "restart.h"
+#include "buffer.h"
 #include "enable.h"
 #include "../egl/context.h"
 #include "../gles/loader.h"
@@ -136,13 +137,24 @@ bool mg_draw_elements_restart(GLenum mode, GLsizei count, GLenum type, const voi
 
     const GLuint restart_value = mg_enable_state()->primitive_restart_index;
 
-    GLint prev_ibo = 0;
-    GLES.glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prev_ibo);
+    // The tracked binding instead of asking the driver: mg_driver_bound_buffer
+    // answers with the driver-side name, which is exactly what the two
+    // glBindBuffer calls below need, and it is read here at entry, before this
+    // function binds the scratch buffer over it. The only path that can leave the
+    // driver's element array binding disagreeing with the tracked one is
+    // gl/gl.cpp's ANGLE depth-clear triangle, and it does that by leaving vertex
+    // array 0 bound, which makes the draw itself wrong either way.
+    const GLuint prev_ibo = mg_driver_bound_buffer(GL_ELEMENT_ARRAY_BUFFER);
 
-    std::vector<GLuint> rewritten(static_cast<size_t>(count));
+    // Grown but never shrunk, and thread_local for the same reason g_restart_ibo
+    // is. Only the first `count` elements are written and uploaded, so whatever a
+    // larger earlier draw left past that is never read; sizing it exactly instead
+    // would zero-fill a range rewrite() overwrites in full immediately after.
+    static thread_local std::vector<GLuint> rewritten;
+    if (rewritten.size() < static_cast<size_t>(count)) rewritten.resize(static_cast<size_t>(count));
 
     if (prev_ibo != 0) {
-        GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLuint>(prev_ibo));
+        GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prev_ibo);
         void* src = GLES.glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER,
                                           static_cast<GLintptr>(reinterpret_cast<uintptr_t>(indices)),
                                           static_cast<GLsizeiptr>(count) * isize, GL_MAP_READ_BIT);
@@ -180,6 +192,6 @@ bool mg_draw_elements_restart(GLenum mode, GLsizei count, GLenum type, const voi
     }
 
     if (!had_fixed) GLES.glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
-    GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLuint>(prev_ibo));
+    GLES.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prev_ibo);
     return true;
 }

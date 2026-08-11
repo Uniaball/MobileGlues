@@ -6,9 +6,11 @@
 // End of Source File Header
 
 #include "transfer.h"
+#include "buffer.h"
 #include "log.h"
 #include "mg.h"
 #include "pixel.h"
+#include "../egl/context.h"
 #include "../gles/loader.h"
 #include <cstring>
 #include <vector>
@@ -223,15 +225,46 @@ bool is_reversed_family(GLenum format, GLenum type) {
            type == GL_UNSIGNED_INT_8_8_8_8 || type == GL_UNSIGNED_INT_8_8_8_8_REV;
 }
 
+// The context the mirror in gl/pixel.cpp was last confirmed against, or ~0 for
+// none -- which context 0, the fallback for a context this layer never saw
+// created, is a legitimate value for.
+//
+// The mirror keys itself on gl_state, a pointer into the MGContext record, and a
+// destroyed context's record can be handed back to the next one at the same
+// address. The id never is (egl/context.h), so requiring both closes the one hole
+// the pointer alone leaves.
+thread_local unsigned long long g_unpack_ctx = ~0ull;
+
+// The six unpack parameters an upload has to know, without asking the driver for
+// them every time. See mg_unpack_state() in gl/pixel.h for why the mirror can be
+// trusted and when it cannot.
+mg_unpack_state_t current_unpack_state() {
+    const unsigned long long ctx = g_current_ctx ? g_current_ctx->id : 0;
+    mg_unpack_state_t st;
+    if (ctx == g_unpack_ctx && mg_unpack_state(&st)) return st;
+
+    GLES.glGetIntegerv(GL_UNPACK_ALIGNMENT, &st.alignment);
+    GLES.glGetIntegerv(GL_UNPACK_ROW_LENGTH, &st.row_length);
+    GLES.glGetIntegerv(GL_UNPACK_SKIP_ROWS, &st.skip_rows);
+    GLES.glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &st.skip_pixels);
+    GLES.glGetIntegerv(GL_UNPACK_IMAGE_HEIGHT, &st.image_height);
+    GLES.glGetIntegerv(GL_UNPACK_SKIP_IMAGES, &st.skip_images);
+    mg_unpack_state_adopt(st);
+    g_unpack_ctx = ctx;
+    return st;
+}
+
 } // namespace
 
 bool mg_upload_has_data(const void* pixels) {
     if (pixels != nullptr) return true;
     // A null pointer still carries bytes when an unpack buffer is bound: there it
     // is an offset into that buffer, not "no data".
-    GLint pbo_probe = 0;
-    GLES.glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &pbo_probe);
-    return pbo_probe != 0;
+    //
+    // Answered from the tracked binding rather than the driver, which was a query
+    // per upload on a predicate every glTexImage* asks. Where the two can disagree
+    // is written out on the constructor's copy of this below.
+    return mg_driver_bound_buffer(GL_PIXEL_UNPACK_BUFFER) != 0;
 }
 
 mg_upload_fix_t::mg_upload_fix_t(GLsizei width, GLsizei height, GLsizei depth, GLenum format_in, GLenum type_in,
@@ -262,17 +295,36 @@ mg_upload_fix_t::mg_upload_fix_t(GLsizei width, GLsizei height, GLsizei depth, G
 
     // With an unpack PBO bound, pixels is an offset -- and offset 0 is real
     // data, so nullptr only means "no data" when no PBO is bound.
-    GLES.glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prev_pbo_);
+    //
+    // The tracked binding, already mapped to the driver's own name so the
+    // destructor can hand it straight back. Nothing borrows this target without
+    // putting it back, and it is not vertex array state, so the depth-clear
+    // triangle that desynchronises the array bindings cannot reach it. Two places
+    // do leave it behind: glDeleteBuffers does not clear the binding slots, so
+    // deleting a still-bound unpack buffer resets the driver to 0 while this keeps
+    // reporting the dead name, and the glTexBuffer emulation in gl/buffer.cpp
+    // leaves the driver on 0 when it gives up on a buffer too small for one texel.
+    //
+    // Both err the same way, and it is the survivable one: the map and the copy
+    // fallback below fail against a target with nothing bound, so the upload is
+    // dropped with a warning. Believing there is no PBO when there is one would
+    // instead read client memory from an offset.
+    prev_pbo_ = static_cast<GLint>(mg_driver_bound_buffer(GL_PIXEL_UNPACK_BUFFER));
     has_data_ = !(pixels_in == nullptr && prev_pbo_ == 0);
     if (!has_data_) return; // allocation only: the enums were all that needed fixing
     if (width <= 0 || height <= 0 || depth <= 0) return;
 
-    GLES.glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_align_);
-    GLES.glGetIntegerv(GL_UNPACK_ROW_LENGTH, &prev_row_len_);
-    GLES.glGetIntegerv(GL_UNPACK_SKIP_ROWS, &prev_skip_rows_);
-    GLES.glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &prev_skip_px_);
-    GLES.glGetIntegerv(GL_UNPACK_IMAGE_HEIGHT, &prev_img_h_);
-    GLES.glGetIntegerv(GL_UNPACK_SKIP_IMAGES, &prev_skip_img_);
+    // Mirrored in gl/pixel.cpp rather than asked of the driver, which was six
+    // queries on every converted upload -- and Minecraft converts every texture it
+    // has. The values are still the driver's, so the destructor restoring them is
+    // still a restore and not an overwrite.
+    const mg_unpack_state_t unpack = current_unpack_state();
+    prev_align_ = unpack.alignment;
+    prev_row_len_ = unpack.row_length;
+    prev_skip_rows_ = unpack.skip_rows;
+    prev_skip_px_ = unpack.skip_pixels;
+    prev_img_h_ = unpack.image_height;
+    prev_skip_img_ = unpack.skip_images;
 
     // IMAGE_HEIGHT and SKIP_IMAGES only describe a three-dimensional transfer, so a
     // 2D upload must read past them however the application left them set -- it

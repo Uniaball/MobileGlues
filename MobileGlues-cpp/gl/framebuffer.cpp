@@ -16,6 +16,21 @@
 
 #define DEBUG 0
 
+// One line per site, not one per call. LOG_W_FORCE is unconditional -- that is
+// what it is for, LOG_W compiles out in release -- and each line costs an
+// __android_log_print, a printf and an fflush'd write to the log file. The only
+// site is in glDrawBuffers, whose condition is a property of the framebuffer's
+// attachment layout: it holds for as long as the application keeps that layout,
+// so it fires on every pass of every frame and says nothing new after the first.
+#define FB_WARN_ONCE(...)                                                                                              \
+    do {                                                                                                               \
+        static bool mg_fb_warned = false;                                                                              \
+        if (!mg_fb_warned) {                                                                                           \
+            mg_fb_warned = true;                                                                                       \
+            LOG_W_FORCE(__VA_ARGS__)                                                                                   \
+        }                                                                                                              \
+    } while (0)
+
 static GLint MAX_COLOR_ATTACHMENTS = 0;
 static GLint MAX_DRAW_BUFFERS = 0;
 // Framebuffer objects are container state: GL does not share them across a share
@@ -111,7 +126,21 @@ static GLint max_color_attachments_or_default() {
 framebuffer_t& get_framebuffer(GLuint id) {
     // Created on first sight of the name, as the old default-construct-on-index
     // did. The reference is what callers keep across further calls to this
-    // function, so the record is what must not move when the map grows.
+    // function, so the record is what must not move when the map grows -- which
+    // is why the table holds framebuffer_t by unique_ptr and why the lookup below
+    // must keep returning the pointee rather than anything stored inline.
+    //
+    // A hit is the overwhelmingly common case: every glBindFramebuffer, every
+    // attachment change and every draw-buffer call routes through here, and a
+    // name is new only once. operator[] is the insertion path -- it drags the
+    // rehash-and-grow tail in at the call site and only then discovers there was
+    // nothing to insert -- so the hit is answered by find() and operator[] is
+    // reached only on a genuine miss.
+    const auto it = framebuffers.find(id);
+    if (it != framebuffers.end() && it->second) return *it->second;
+    // The null-pointer half of that test is not dead: a throwing make_unique
+    // leaves an inserted-but-empty slot behind, and this function has always
+    // filled such a slot rather than dereferencing it.
     std::unique_ptr<framebuffer_t>& slot = framebuffers[id];
     if (!slot) slot = std::make_unique<framebuffer_t>();
     return *slot;
@@ -463,9 +492,9 @@ void glDrawBuffers(GLsizei n, const GLenum* bufs) {
         // buffer list, so the application gets GL_INVALID_OPERATION -- which is
         // both true and something it can now see -- rather than a framebuffer that
         // quietly lost an attachment.
-        LOG_W_FORCE("glDrawBuffers: fb %u wants attachment %u in slot %d but nothing is recorded there; "
-                    "passing the list through rather than detaching it",
-                    current_draw_fbo, bufs[i] - GL_COLOR_ATTACHMENT0, i)
+        FB_WARN_ONCE("glDrawBuffers: fb %u wants attachment %u in slot %d but nothing is recorded there; "
+                     "passing the list through rather than detaching it",
+                     current_draw_fbo, bufs[i] - GL_COLOR_ATTACHMENT0, i);
         restore_home_attachments(fbo);
         GLES.glDrawBuffers(n, bufs);
         return;

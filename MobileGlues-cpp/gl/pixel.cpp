@@ -154,7 +154,12 @@ GLsizei pixel_sizeof(GLenum format, GLenum type) {
 }
 
 // ---------------------------------------------------------------------------
-// The pixel-store parameters GLES does not have
+// Pixel-store state
+//
+// Two halves that look alike and are not. The six parameters GLES does not have
+// are *stored* here, because there is nowhere else for them to live. The unpack
+// parameters GLES does have are only *mirrored* here: the driver still owns them,
+// and this is a copy kept so a transfer does not have to ask for them.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -179,9 +184,93 @@ GLint* desktop_pixel_store_slot(GLenum pname) {
         return nullptr;
     }
 }
+
+// The mirror of the unpack parameters GLES does have, and the context it
+// describes.
+//
+// Thread-local because a context is current on one thread at a time, and keyed on
+// gl_state because that pointer is per context -- the same reason the six above
+// live behind it. The key is only half of what identifies a context, though: a
+// destroyed context's record can be handed back to the next one at the same
+// address, so a holder that has an id available should check that too. Nothing
+// here can: gl/pixel.cpp is linked by the host test harness, which has no EGL
+// layer to ask.
+struct unpack_mirror_t {
+    mg_unpack_state_t values;
+    const gl_state_s* owner = nullptr;
+    bool valid = false;
+};
+
+thread_local unpack_mirror_t g_unpack_mirror;
+
+// Where each GLES-native unpack parameter lives in the mirror, or nullptr for a
+// pname that is not one of them.
+GLint* unpack_mirror_slot(mg_unpack_state_t& v, GLenum pname) {
+    switch (pname) {
+    case GL_UNPACK_ALIGNMENT:
+        return &v.alignment;
+    case GL_UNPACK_ROW_LENGTH:
+        return &v.row_length;
+    case GL_UNPACK_SKIP_ROWS:
+        return &v.skip_rows;
+    case GL_UNPACK_SKIP_PIXELS:
+        return &v.skip_pixels;
+    case GL_UNPACK_IMAGE_HEIGHT:
+        return &v.image_height;
+    case GL_UNPACK_SKIP_IMAGES:
+        return &v.skip_images;
+    default:
+        return nullptr;
+    }
+}
+
+// Mirror one write on its way to the driver. The value still goes to the driver
+// afterwards; this only records what it will be.
+void unpack_mirror_record(GLenum pname, GLint param) {
+    GLint* slot = unpack_mirror_slot(g_unpack_mirror.values, pname);
+    if (slot == nullptr) return;
+
+    if (g_unpack_mirror.owner != gl_state) {
+        // A context the mirror does not describe. Writing one parameter into
+        // another context's five would be worse than not mirroring at all, so the
+        // record is dropped instead and the next reader re-reads the driver --
+        // which by then has this write too, because the frontend forwards it as
+        // soon as this returns.
+        g_unpack_mirror.owner = gl_state;
+        g_unpack_mirror.valid = false;
+    }
+    if (!g_unpack_mirror.valid) return;
+
+    // A value the driver refuses leaves the driver's state alone, so it has to
+    // leave the mirror alone as well. GL 4.6 sec. 8.4.1: an alignment is 1, 2, 4
+    // or 8, and none of the counts may be negative.
+    if (pname == GL_UNPACK_ALIGNMENT) {
+        if (param != 1 && param != 2 && param != 4 && param != 8) return;
+    } else if (param < 0) {
+        return;
+    }
+    *slot = param;
+}
 } // namespace
 
+bool mg_unpack_state(mg_unpack_state_t* out) {
+    if (!g_unpack_mirror.valid || g_unpack_mirror.owner != gl_state) return false;
+    if (out != nullptr) *out = g_unpack_mirror.values;
+    return true;
+}
+
+void mg_unpack_state_adopt(const mg_unpack_state_t& values) {
+    g_unpack_mirror.values = values;
+    g_unpack_mirror.owner = gl_state;
+    g_unpack_mirror.valid = true;
+}
+
 bool mg_pixel_store_set(GLenum pname, GLint param) {
+    // Every pname passes through here, including the ones that go on to the
+    // driver, which is what makes this the one place the unpack mirror can be
+    // kept from.
+    unpack_mirror_record(pname, param);
+
     GLint* slot = desktop_pixel_store_slot(pname);
     if (slot == nullptr) return false;
     // The booleans store as 0 or 1, the two counts as themselves. GL rejects a
