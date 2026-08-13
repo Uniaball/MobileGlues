@@ -15,9 +15,12 @@
 #include <cstring>
 #include <optional>
 typedef const char* cstr;
-static const cstr gles3_lib[] = {"libGLESv3_CM", "libGLESv3", nullptr};
-static const cstr egl_libs[] = {"libEGL", nullptr};
-static const cstr vk_lib[] = {"libvulkan", nullptr};
+// open_lib() below hands these to dlopen() verbatim, unlike the loader in gles/loader.cpp which appends a
+// platform extension itself. Without the ".so" every dlopen here fails, getGPUInfo() returns an empty string
+// and hasVulkan12() returns 0 on every device.
+static const cstr gles3_lib[] = {"libGLESv3_CM.so", "libGLESv3.so", nullptr};
+static const cstr egl_libs[] = {"libEGL.so", nullptr};
+static const cstr vk_lib[] = {"libvulkan.so", nullptr};
 
 namespace egl_func {
     PFNEGLGETDISPLAYPROC eglGetDisplay = nullptr;
@@ -122,7 +125,10 @@ std::string getGPUInfo() {
     if (glesLib) {
         auto glGetString = (const GLubyte* (*)(GLenum))dlsym(glesLib, "glGetString");
         if (glGetString) {
-            renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+            // Now that the GLES library actually opens, this call runs for the first time; a driver that answers
+            // GL_RENDERER with null would otherwise construct the string from a null pointer.
+            const GLubyte* name = glGetString(GL_RENDERER);
+            if (name) renderer = reinterpret_cast<const char*>(name);
         }
         dlclose(glesLib);
     }
@@ -185,19 +191,17 @@ int hasVulkan12() {
     auto vkGetPhysicalDeviceProperties =
         (PFN_vkGetPhysicalDeviceProperties)dlsym(vulkan_lib, "vkGetPhysicalDeviceProperties");
 
-    if (!vkEnumerateInstanceExtensionProperties || !vkCreateInstance || !vkDestroyInstance ||
-        !vkEnumeratePhysicalDevices || !vkGetPhysicalDeviceProperties) {
-        dlclose(vulkan_lib);
-        return 0;
-    }
-
-    VkResult result = VK_SUCCESS;
+    // Everything below runs to a single exit: the early returns this used to take left the library open and,
+    // on the success path, leaked the physical-device array as well.
+    int found = 0;
+    bool instanceCreated = false;
+    VkInstance instance = VK_NULL_HANDLE;
+    VkPhysicalDevice* physicalDevices = nullptr;
     uint32_t instanceExtensionCount = 0;
+    uint32_t gpuCount = 0;
 
-    result = vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, nullptr);
-    if (result != VK_SUCCESS) {
-        return 0;
-    }
+    bool haveEntryPoints = vkEnumerateInstanceExtensionProperties && vkCreateInstance && vkDestroyInstance &&
+                           vkEnumeratePhysicalDevices && vkGetPhysicalDeviceProperties;
 
     VkApplicationInfo appInfo = {};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -218,41 +222,38 @@ int hasVulkan12() {
     createInfo.enabledExtensionCount = 0;
     createInfo.ppEnabledExtensionNames = nullptr;
 
-    VkInstance instance = {};
-    result = vkCreateInstance(&createInfo, nullptr, &instance);
-    if (result != VK_SUCCESS) {
-        hasVk12 = false;
-        return 0;
-    }
+    if (haveEntryPoints &&
+        vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, nullptr) == VK_SUCCESS &&
+        vkCreateInstance(&createInfo, nullptr, &instance) == VK_SUCCESS) {
+        instanceCreated = true;
+        if (vkEnumeratePhysicalDevices(instance, &gpuCount, nullptr) == VK_SUCCESS && gpuCount > 0) {
+            physicalDevices = (VkPhysicalDevice*)malloc(sizeof(VkPhysicalDevice) * gpuCount);
+            // A null malloc used to be handed straight to the driver, which writes gpuCount handles through it.
+            if (physicalDevices && vkEnumeratePhysicalDevices(instance, &gpuCount, physicalDevices) == VK_SUCCESS) {
+                for (uint32_t i = 0; i < gpuCount; i++) {
+                    VkPhysicalDeviceProperties deviceProperties;
+                    vkGetPhysicalDeviceProperties(physicalDevices[i], &deviceProperties);
 
-    uint32_t gpuCount = 0;
-    result = vkEnumeratePhysicalDevices(instance, &gpuCount, nullptr);
-    if (result != VK_SUCCESS || gpuCount == 0) {
-        vkDestroyInstance(instance, nullptr);
-        hasVk12 = false;
-        return 0;
-    }
-
-    auto* physicalDevices = (VkPhysicalDevice*)malloc(sizeof(VkPhysicalDevice) * gpuCount);
-    vkEnumeratePhysicalDevices(instance, &gpuCount, physicalDevices);
-
-    for (uint32_t i = 0; i < gpuCount; i++) {
-        VkPhysicalDeviceProperties deviceProperties;
-        vkGetPhysicalDeviceProperties(physicalDevices[i], &deviceProperties);
-
-        if (deviceProperties.apiVersion >= VK_API_VERSION_1_2) {
-            vkDestroyInstance(instance, nullptr);
-            hasVk12 = true;
-            return 1;
+                    if (deviceProperties.apiVersion >= VK_API_VERSION_1_2) {
+                        found = 1;
+                        break;
+                    }
+                }
+            }
         }
     }
 
     free(physicalDevices);
+    if (instanceCreated) vkDestroyInstance(instance, nullptr);
+    dlclose(vulkan_lib);
 
-    vkDestroyInstance(instance, nullptr);
+    hasVk12 = found;
+    return found;
+
+#else
 
     dlclose(vulkan_lib);
-    hasVk12 = false;
+    hasVk12 = 0;
     return 0;
 
 #endif

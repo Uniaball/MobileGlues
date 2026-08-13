@@ -9,10 +9,10 @@
 #include "../egl/context.h"
 #include "glsl/glsl_for_es.h"
 #include <mutex>
-#include <unordered_map>
+#include <memory>
+#include <ska/flat_hash_map.hpp>
 #include <array>
 #include <cstring>
-#include "ankerl/unordered_dense.h"
 #include "texture.h"
 
 #define DEBUG 0
@@ -33,8 +33,8 @@ static GLint maxArrayId = 0;
 // The tables stay private to this file and are selected by a thread_local
 // pointer that eglMakeCurrent swaps, which is why the ~90 access sites only
 // changed shape rather than routing through an accessor on every use.
-// std::unordered_map keeps references stable, so these pointers survive the
-// insertion of another group.
+// The state is held by pointer: the map moves its elements when it grows, and
+// these thread_local pointers have to outlive other contexts being added.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -88,8 +88,13 @@ struct buffer_ctx_state_t { // private to one context
 };
 
 std::mutex g_buf_mutex;
-std::unordered_map<unsigned long long, buffer_group_state_t> g_buf_groups;
-std::unordered_map<unsigned long long, buffer_ctx_state_t> g_buf_ctxs;
+// The tables hold their state by pointer. A thread_local pointer into an entry is
+// the whole point of the design -- the ~90 access sites read through g_bg/g_bc
+// rather than looking anything up -- and the map moves its elements when it
+// grows, so the entry itself must not be what moves. The unique_ptr stays put
+// while the map rehashes around it.
+ska::flat_hash_map<unsigned long long, std::unique_ptr<buffer_group_state_t>> g_buf_groups;
+ska::flat_hash_map<unsigned long long, std::unique_ptr<buffer_ctx_state_t>> g_buf_ctxs;
 
 buffer_group_state_t g_buf_group_default;
 buffer_ctx_state_t g_buf_ctx_default;
@@ -106,8 +111,21 @@ void mg_buffer_bind_context(unsigned long long ctx_id, unsigned long long group_
         return;
     }
     std::lock_guard<std::mutex> lock(g_buf_mutex);
-    g_bg = &g_buf_groups[group_id];
-    g_bc = &g_buf_ctxs[ctx_id];
+    std::unique_ptr<buffer_group_state_t>& group = g_buf_groups[group_id];
+    if (!group) group = std::make_unique<buffer_group_state_t>();
+    std::unique_ptr<buffer_ctx_state_t>& ctx = g_buf_ctxs[ctx_id];
+    if (!ctx) ctx = std::make_unique<buffer_ctx_state_t>();
+    g_bg = group.get();
+    g_bc = ctx.get();
+}
+
+void mg_buffer_forget_context(unsigned long long ctx_id) {
+    if (ctx_id == 0) return;
+    std::lock_guard<std::mutex> lock(g_buf_mutex);
+    const auto it = g_buf_ctxs.find(ctx_id);
+    if (it == g_buf_ctxs.end()) return;
+    if (g_bc == it->second.get()) g_bc = &g_buf_ctx_default;
+    g_buf_ctxs.erase(it);
 }
 
 #define g_gen_buffers (g_bg->gen_buffers)
@@ -312,6 +330,71 @@ GLuint find_bound_buffer_by_target(GLenum target) {
     if (target == GL_ELEMENT_ARRAY_BUFFER) return get_ibo_by_vao(find_bound_array());
     const int idx = binding_target_to_index(target);
     return idx >= 0 ? g_bound_buffers_arr[idx] : 0;
+}
+
+// The name the *driver* has bound to `target`, i.e. what
+// GLES.glGetIntegerv(<target>_BINDING) would answer, worked out from the tracked
+// bindings rather than by asking the driver.
+//
+// Buffer names are renamed across this boundary: the application sees names
+// gen_buffer() hands out and the driver sees the ones glGenBuffers gave back, so
+// find_bound_buffer_by_target's answer must not be passed to GLES.glBindBuffer
+// unmapped. This one may. A name the application bound without ever generating it
+// is forwarded verbatim by glBindBuffer -- GLES creates the object on first bind
+// -- so it is its own driver name.
+//
+// Two limits, both shared with this layer's own glGetIntegerv:
+//   - It reports the last name bound to the target, and glDeleteBuffers does not
+//     clear the binding slots (only GL_PARAMETER_BUFFER, which has no driver-side
+//     binding to fall back on). Deleting a still-bound buffer resets the driver's
+//     binding to 0 while this keeps reporting the dead name.
+//   - It is the tracked state, so it is only the driver's state where the two
+//     agree. Every internal path that binds GL_ELEMENT_ARRAY_BUFFER or
+//     GL_DRAW_INDIRECT_BUFFER through GLES.* directly (gl/multidraw.cpp,
+//     gl/drawing.cpp, gl/restart.cpp) saves and restores around its own work, so
+//     they disagree only inside those windows -- ask before the temporary bind,
+//     never during it. gl/gl.cpp's depth-clear triangle is the one path that does
+//     not: it leaves the driver on vertex array 0 and GL_ARRAY_BUFFER 0 without
+//     putting the application's back, which desynchronises the element array
+//     binding too, since that is vertex array state.
+//
+// GL_PARAMETER_BUFFER has no GLES binding at all; the mapped name is returned for
+// it anyway, because gl/multidraw.cpp is the only thing that asks and it needs the
+// real object to bind somewhere else.
+GLuint mg_driver_bound_buffer(GLenum target) {
+    const GLuint name = find_bound_buffer_by_target(target);
+    const GLuint real = (name == 0 || !has_buffer(name)) ? name : find_real_buffer(name);
+#if GLOBAL_DEBUG
+    // The divergence this answer is vulnerable to -- driver state mutated
+    // behind the frontend's back -- is undetectable at runtime: the tracked
+    // state always has an answer and cannot know it is stale. So debug builds
+    // pay the round-trip this function exists to avoid, and scream on a
+    // mismatch instead of letting a wrong binding surface three calls later as
+    // a skipped draw or a corrupted restore. Release builds trust the tracking.
+    if (GLES.glGetIntegerv) {
+        GLenum pname = 0;
+        switch (target) {
+        case GL_ARRAY_BUFFER:          pname = GL_ARRAY_BUFFER_BINDING; break;
+        case GL_ELEMENT_ARRAY_BUFFER:  pname = GL_ELEMENT_ARRAY_BUFFER_BINDING; break;
+        case GL_DRAW_INDIRECT_BUFFER:  pname = GL_DRAW_INDIRECT_BUFFER_BINDING; break;
+        case GL_PIXEL_UNPACK_BUFFER:   pname = GL_PIXEL_UNPACK_BUFFER_BINDING; break;
+        case GL_PIXEL_PACK_BUFFER:     pname = GL_PIXEL_PACK_BUFFER_BINDING; break;
+        case GL_COPY_READ_BUFFER:      pname = GL_COPY_READ_BUFFER_BINDING; break;
+        case GL_COPY_WRITE_BUFFER:     pname = GL_COPY_WRITE_BUFFER_BINDING; break;
+        default: break;
+        }
+        if (pname != 0) {
+            GLint driver = 0;
+            GLES.glGetIntegerv(pname, &driver);
+            if (static_cast<GLuint>(driver) != real) {
+                LOG_E("mg_driver_bound_buffer(0x%X): tracked %u (real %u) but the driver holds %u -- "
+                      "something mutated this binding without going through the frontend",
+                      target, name, real, static_cast<GLuint>(driver))
+            }
+        }
+    }
+#endif
+    return real;
 }
 
 GLuint find_bound_buffer(GLenum key) {
@@ -732,6 +815,75 @@ void glBindVertexBuffer(GLuint bindingindex, GLuint buffer, GLintptr offset, GLs
     CHECK_GL_ERROR
 }
 
+// The transfer pair GLES accepts for a given sized internalformat.
+//
+// The texture-buffer emulation used to allocate and upload with a hardcoded
+// GL_RED_INTEGER + GL_BYTE whatever the internalformat was. ES validates
+// internalformat/format/type as a triple, and that one is legal for exactly one
+// format -- GL_R8I. Everything else (GL_R32I, GL_RGBA32F, even GL_R8UI, which
+// wants GL_UNSIGNED_BYTE) failed the glTexImage2D with GL_INVALID_OPERATION,
+// left level 0 undefined, and the emulated texelFetch read zeros from an
+// incomplete texture. Sized here from the same table as the texel size, so the
+// two cannot drift apart.
+//
+// Returns false for a format with no ES-legal pair -- the normalised 16-bit ones
+// need EXT_texture_norm16, and depth formats are not texture-buffer formats at
+// all. The caller drops the call instead of guessing.
+//
+// Deliberately wider than GL 4.6 table 8.16, which lists only the 32-bit
+// three-component forms among the RGB ones: the extra entries here (GL_RGB8,
+// GL_RGB8I/UI, GL_RGB16I/UI/F) are all valid ES triples, so emulating them costs
+// nothing, while refusing them would only break an application that already works
+// against the permissive desktop drivers. Being stricter than the hardware buys
+// no correctness.
+bool get_internal_format_transfer(GLenum internalformat, GLenum* format, GLenum* type) {
+    switch (internalformat) {
+    // clang-format off
+    case GL_R8:        *format = GL_RED;           *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_R8I:       *format = GL_RED_INTEGER;   *type = GL_BYTE;           return true;
+    case GL_R8UI:      *format = GL_RED_INTEGER;   *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_R16I:      *format = GL_RED_INTEGER;   *type = GL_SHORT;          return true;
+    case GL_R16UI:     *format = GL_RED_INTEGER;   *type = GL_UNSIGNED_SHORT; return true;
+    case GL_R16F:      *format = GL_RED;           *type = GL_HALF_FLOAT;     return true;
+    case GL_R32I:      *format = GL_RED_INTEGER;   *type = GL_INT;            return true;
+    case GL_R32UI:     *format = GL_RED_INTEGER;   *type = GL_UNSIGNED_INT;   return true;
+    case GL_R32F:      *format = GL_RED;           *type = GL_FLOAT;          return true;
+
+    case GL_RG8:       *format = GL_RG;            *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_RG8I:      *format = GL_RG_INTEGER;    *type = GL_BYTE;           return true;
+    case GL_RG8UI:     *format = GL_RG_INTEGER;    *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_RG16I:     *format = GL_RG_INTEGER;    *type = GL_SHORT;          return true;
+    case GL_RG16UI:    *format = GL_RG_INTEGER;    *type = GL_UNSIGNED_SHORT; return true;
+    case GL_RG16F:     *format = GL_RG;            *type = GL_HALF_FLOAT;     return true;
+    case GL_RG32I:     *format = GL_RG_INTEGER;    *type = GL_INT;            return true;
+    case GL_RG32UI:    *format = GL_RG_INTEGER;    *type = GL_UNSIGNED_INT;   return true;
+    case GL_RG32F:     *format = GL_RG;            *type = GL_FLOAT;          return true;
+
+    case GL_RGB8:      *format = GL_RGB;           *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_RGB8I:     *format = GL_RGB_INTEGER;   *type = GL_BYTE;           return true;
+    case GL_RGB8UI:    *format = GL_RGB_INTEGER;   *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_RGB16I:    *format = GL_RGB_INTEGER;   *type = GL_SHORT;          return true;
+    case GL_RGB16UI:   *format = GL_RGB_INTEGER;   *type = GL_UNSIGNED_SHORT; return true;
+    case GL_RGB16F:    *format = GL_RGB;           *type = GL_HALF_FLOAT;     return true;
+    case GL_RGB32I:    *format = GL_RGB_INTEGER;   *type = GL_INT;            return true;
+    case GL_RGB32UI:   *format = GL_RGB_INTEGER;   *type = GL_UNSIGNED_INT;   return true;
+    case GL_RGB32F:    *format = GL_RGB;           *type = GL_FLOAT;          return true;
+
+    case GL_RGBA8:     *format = GL_RGBA;          *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_RGBA8I:    *format = GL_RGBA_INTEGER;  *type = GL_BYTE;           return true;
+    case GL_RGBA8UI:   *format = GL_RGBA_INTEGER;  *type = GL_UNSIGNED_BYTE;  return true;
+    case GL_RGBA16I:   *format = GL_RGBA_INTEGER;  *type = GL_SHORT;          return true;
+    case GL_RGBA16UI:  *format = GL_RGBA_INTEGER;  *type = GL_UNSIGNED_SHORT; return true;
+    case GL_RGBA16F:   *format = GL_RGBA;          *type = GL_HALF_FLOAT;     return true;
+    case GL_RGBA32I:   *format = GL_RGBA_INTEGER;  *type = GL_INT;            return true;
+    case GL_RGBA32UI:  *format = GL_RGBA_INTEGER;  *type = GL_UNSIGNED_INT;   return true;
+    case GL_RGBA32F:   *format = GL_RGBA;          *type = GL_FLOAT;          return true;
+    // clang-format on
+    default:
+        return false;
+    }
+}
+
 size_t get_internal_format_size(GLenum internalformat) {
     switch (internalformat) {
     case GL_R8: return 1;
@@ -799,6 +951,21 @@ size_t get_internal_format_size(GLenum internalformat) {
 }
 
 extern std::string bufSampelerName;
+
+// Report a rejected argument once per site. This layer cannot raise a GL error
+// -- glGetError always answers GL_NO_ERROR by design -- so an unusable argument
+// means "do nothing" plus one line a user can paste into a bug report. LOG_W and
+// LOG_E compile to nothing in release builds, hence LOG_W_FORCE.
+#define BU_WARN_ONCE(...)                                                                                              \
+    do {                                                                                                               \
+        static bool mg_bu_warned = false;                                                                              \
+        if (!mg_bu_warned) {                                                                                           \
+            mg_bu_warned = true;                                                                                       \
+            LOG_W_FORCE(__VA_ARGS__)                                                                                   \
+        }                                                                                                              \
+    } while (0)
+
+// Todo: any glGet* related to this function?
 void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
     LOG()
     LOG_D("glTexBuffer, target = %s, internalformat = %s, buffer = %d", glEnumToString(target),
@@ -819,6 +986,32 @@ void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
 
     if (hardware->emulate_texture_buffer) {
         LOG_D("Emulating glTexBuffer");
+
+        // internalformat arrives unvalidated -- a format outside GL 4.6 table 8.16
+        // is GL_INVALID_ENUM in real GL and this layer raises nothing -- so
+        // get_internal_format_size answers 0 for it, as its own default case says.
+        // That 0 used to reach "bufferSize / pixelSize" below: undefined, and on
+        // arm64 it divides to zero, giving a 0 x 1 texture that the emulated
+        // texelFetch then indexes modulo zero. Size the texel first and drop the
+        // call if we cannot, before any binding is disturbed.
+        GLuint pixelSize = get_internal_format_size(internalformat);
+        if (pixelSize == 0) {
+            BU_WARN_ONCE("glTexBuffer: no texel size known for internalformat %s, texture buffer left untouched",
+                         glEnumToString(internalformat));
+            mg_set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
+
+        // The transfer pair this internalformat actually accepts. Hardcoding one
+        // pair here is what made every format but GL_R8I fail to allocate.
+        GLenum tb_format = GL_RED_INTEGER, tb_type = GL_BYTE;
+        if (!get_internal_format_transfer(internalformat, &tb_format, &tb_type)) {
+            BU_WARN_ONCE("glTexBuffer: no GLES transfer pair for internalformat %s, texture buffer left untouched",
+                         glEnumToString(internalformat));
+            mg_set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
+
         GLint boundTexture = 0;
         GLint prev_pixel_buffer_binding = 0;
         GLES.glActiveTexture(GL_TEXTURE0 + 15);
@@ -828,6 +1021,10 @@ void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
         LOG_D("Previous GL_PIXEL_UNPACK_BUFFER_BINDING = %d", prev_pixel_buffer_binding);
         if (!boundTexture) {
             LOG_D("No texture bound to GL_TEXTURE_BUFFER, skipping emulation.");
+            // Unit 15 is only ever borrowed for the emulated buffer texture; every
+            // other borrower hands it back. Returning from here without doing so
+            // left the app's next glBindTexture landing on unit 15.
+            GLES.glActiveTexture(GL_TEXTURE0 + gl_state->current_tex_unit);
             return;
         }
         GLES.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, real_buffer);
@@ -840,8 +1037,19 @@ void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
         LOG_D("Binding texture %u to GL_TEXTURE_2D", boundTexture);
 
         const GLuint MAX_WIDTH = 8192;
-        GLuint pixelSize = get_internal_format_size(internalformat);
         GLuint numElements = bufferSize / pixelSize;
+        if (numElements == 0) {
+            // A buffer too small to hold one texel. The pixelSize == 0 guard above
+            // exists because a zero-sized texture makes the emulated texelFetch
+            // index modulo zero; this reaches the same place by the other road,
+            // through a 0 x 1 glTexImage2D and a u_BufferTexWidth of 0.
+            BU_WARN_ONCE("glTexBuffer: buffer of %d bytes holds no %u-byte texel, texture buffer left untouched",
+                         bufferSize, pixelSize);
+            mg_set_gl_error(GL_INVALID_VALUE);
+            GLES.glActiveTexture(GL_TEXTURE0 + gl_state->current_tex_unit);
+            return;
+        }
+
         GLuint width = numElements;
         GLuint height = 1;
         if (width > MAX_WIDTH) {
@@ -858,17 +1066,22 @@ void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer) {
         GLES.glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
         GLES.glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
 
-        GLES.glTexImage2D(GL_TEXTURE_2D, 0, internalformat, width, height, 0, GL_RED_INTEGER, GL_BYTE, nullptr);
+        // TODO: Optimize the glTexImage2D call
+        GLES.glTexImage2D(GL_TEXTURE_2D, 0, internalformat, width, height, 0, tb_format, tb_type, nullptr);
 
         GLES.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, real_buffer);
 
-        if (height == 1) {
-            GLES.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, 1, GL_RED_INTEGER, GL_BYTE, nullptr);
-        } else {
-            for (GLuint row = 0; row < height; ++row) {
-                void* offset = (void*)(row * width * pixelSize);
-                GLES.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, row, width, 1, GL_RED_INTEGER, GL_BYTE, offset);
-            }
+        for (GLuint row = 0; row < height; ++row) {
+            // The last row is short whenever the element count is not a multiple
+            // of the row width. Asking for a full row anyway made the driver read
+            // past the end of the unpack buffer, which GLES answers with
+            // GL_INVALID_OPERATION and a no-op -- so the tail of the buffer was
+            // never uploaded and texelFetch read it back as whatever the
+            // allocation left there.
+            const GLuint row_texels = (row + 1 == height) ? (numElements - row * width) : width;
+            if (row_texels == 0) break;
+            void* offset = (void*)(static_cast<size_t>(row) * width * pixelSize);
+            GLES.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, row, row_texels, 1, tb_format, tb_type, offset);
         }
 
         GLES.glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);

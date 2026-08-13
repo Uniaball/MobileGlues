@@ -184,8 +184,17 @@ typedef enum class FSR1_Quality_Preset : int { // may be useless
     MaxValue      // 5
 };
 
+constexpr int MD_ENTRY_COUNT = static_cast<int>(md_entry_t::MaxValue);
+constexpr int MD_BACKEND_COUNT = static_cast<int>(md_backend_t::MaxValue);
+
 struct global_settings_t {
     AngleMode angle;
+    // The two halves of how `angle` came to be, kept so a report can tell the
+    // truth. `angle` alone cannot: EnableIfPossible resolves to Disabled on a
+    // device the probe rejects, and then nothing downstream can distinguish
+    // "user did not want ANGLE" from "user wanted it, device cannot".
+    AngleConfig angle_config; // the raw configured choice, before device gating
+    bool angle_supported;     // what checkIfANGLESupported() said at init
     IgnoreErrorLevel ignore_error;
     bool ext_compute_shader;
     bool ext_timer_query;
@@ -193,8 +202,16 @@ struct global_settings_t {
     bool ext_shader_atomic_counters;
     bool buffer_coherent_as_flush;
     size_t max_glsl_cache_size;
-    md_backend_t multidraw_backend[static_cast<int>(md_entry_t::MaxValue)];
-    unsigned multidraw_disabled_mask; // bit (1u << md_backend_t) = user disabled it
+    md_backend_t multidraw_backend[MD_ENTRY_COUNT];
+    // Per entry point: the user's preference order over the backends that are a
+    // distinct implementation there AND that this device can run, best first.
+    // Built by init_settings_post() from "multidrawOrder" (global, may contain
+    // the pseudo item "native") and "multidrawOrder<EntryPoint>" (per-function
+    // exception, concrete backends only). The runtime fallback chains walk this
+    // order too, so a degradation never jumps somewhere the user ranked lower
+    // than necessary -- or higher than the failing backend.
+    md_backend_t multidraw_order[MD_ENTRY_COUNT][MD_BACKEND_COUNT];
+    int multidraw_order_len[MD_ENTRY_COUNT];
     AngleDepthClearFixMode angle_depth_clear_fix_mode;
     Version custom_gl_version;
     FSR1_Quality_Preset fsr1_setting;
@@ -215,13 +232,12 @@ inline md_backend_t multidraw_backend_of(md_entry_t e) {
 }
 const char* md_backend_name(md_backend_t b);
 
-// True when the user disabled this backend with multidrawDisableBackends.
-// The runtime fallback chains in gl/multidraw.cpp consult this too: resolution
-// alone is not enough, because a chain can hand control to a backend the user
-// asked never to be used.
-inline bool md_backend_disabled(md_backend_t b) {
-    return (global_settings.multidraw_disabled_mask & (1u << static_cast<int>(b))) != 0;
-}
+// The backend the runtime fallback chains should try after `cur` failed for
+// this entry point: the next item in the user's order. When `cur` is not in the
+// order (a mg_* symbol reached by a direct dlsym), the last item is returned so
+// the chain terminates instead of cycling. Returns the last item too when `cur`
+// already is the last -- callers guard against calling back into `cur`.
+md_backend_t md_next_backend(md_entry_t e, md_backend_t cur);
 
 // Suffix of the mg_<entry>_<suffix> symbol implementing a backend. One table so
 // the dispatcher in gl/multidraw.cpp and the symbol glx/lookup.cpp hands to the

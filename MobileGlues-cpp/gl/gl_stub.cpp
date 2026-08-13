@@ -10,6 +10,7 @@
 #include "log.h"
 #include "../gles/loader.h"
 #include "mg.h"
+#include "ExtWrappers/DSAWrapper.h"
 #define DEBUG false
 
 #ifdef __cplusplus
@@ -265,7 +266,7 @@ STUB_FUNCTION_HEAD(void, glColorMaterial, GLenum face, GLenum mode ) STUB_FUNCTI
 * Raster functions
 */
 STUB_FUNCTION_HEAD(void, glPixelZoom, GLfloat xfactor, GLfloat yfactor ) STUB_FUNCTION_END_NO_RETURN(void, glPixelZoom,xfactor,yfactor)
-STUB_FUNCTION_HEAD(void, glPixelStoref, GLenum pname, GLfloat param ) STUB_FUNCTION_END_NO_RETURN(void, glPixelStoref,pname,param)
+// STUB_FUNCTION_HEAD(void, glPixelStoref, GLenum pname, GLfloat param ) STUB_FUNCTION_END_NO_RETURN(void, glPixelStoref,pname,param)   // moved to gl/texture.cpp: sets the pixel-store state like the integer form instead of dropping it
 STUB_FUNCTION_HEAD(void, glPixelTransferf, GLenum pname, GLfloat param ) STUB_FUNCTION_END_NO_RETURN(void, glPixelTransferf,pname,param)
 STUB_FUNCTION_HEAD(void, glPixelTransferi, GLenum pname, GLint param ) STUB_FUNCTION_END_NO_RETURN(void, glPixelTransferi,pname,param)
 STUB_FUNCTION_HEAD(void, glPixelMapfv, GLenum map, GLsizei mapsize,const GLfloat *values ) STUB_FUNCTION_END_NO_RETURN(void, glPixelMapfv,map,mapsize,values)
@@ -502,7 +503,7 @@ STUB_FUNCTION_HEAD(void, glVertexAttrib4ubv, GLuint index, const GLubyte* v); ST
 STUB_FUNCTION_HEAD(void, glVertexAttrib4uiv, GLuint index, const GLuint* v); STUB_FUNCTION_END_NO_RETURN(void, glVertexAttrib4uiv,index,v)
 STUB_FUNCTION_HEAD(void, glVertexAttrib4usv, GLuint index, const GLushort* v); STUB_FUNCTION_END_NO_RETURN(void, glVertexAttrib4usv,index,v)
 // STUB_FUNCTION_HEAD(void, glPrimitiveRestartIndex, GLuint index); STUB_FUNCTION_END_NO_RETURN(void, glPrimitiveRestartIndex,index)   // implemented in gl/enable.cpp
-STUB_FUNCTION_HEAD(void, glGetActiveUniformName, GLuint program, GLuint uniformIndex, GLsizei bufSize, GLsizei* length, GLchar* uniformName); STUB_FUNCTION_END_NO_RETURN(void, glGetActiveUniformName,program,uniformIndex,bufSize,length,uniformName)
+// STUB_FUNCTION_HEAD(void, glGetActiveUniformName, GLuint program, GLuint uniformIndex, GLsizei bufSize, GLsizei* length, GLchar* uniformName); STUB_FUNCTION_END_NO_RETURN(void, glGetActiveUniformName,program,uniformIndex,bufSize,length,uniformName)   // implemented in gl/program.cpp
 //STUB_FUNCTION_HEAD(void, glMultiDrawElementsBaseVertex, GLenum mode, const GLsizei* count, GLenum type, const void* const*indices, GLsizei drawcount, const GLint* basevertex); STUB_FUNCTION_END_NO_RETURN(void, glMultiDrawElementsBaseVertex,mode,count,type,indices,drawcount,basevertex)
 STUB_FUNCTION_HEAD(void, glProvokingVertex, GLenum mode); STUB_FUNCTION_END_NO_RETURN(void, glProvokingVertex,mode)
 STUB_FUNCTION_HEAD(void, glTexImage2DMultisample, GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height, GLboolean fixedsamplelocations); STUB_FUNCTION_END_NO_RETURN(void, glTexImage2DMultisample,target,samples,internalformat,width,height,fixedsamplelocations)
@@ -749,7 +750,7 @@ STUB_FUNCTION_HEAD(void, glClipControl, GLenum origin, GLenum depth); STUB_FUNCT
 //STUB_FUNCTION_HEAD(void, glGetQueryBufferObjectiv, GLuint id, GLuint buffer, GLenum pname, GLintptr offset); STUB_FUNCTION_END_NO_RETURN(void, glGetQueryBufferObjectiv,id,buffer,pname,offset)
 //STUB_FUNCTION_HEAD(void, glGetQueryBufferObjectui64v, GLuint id, GLuint buffer, GLenum pname, GLintptr offset); STUB_FUNCTION_END_NO_RETURN(void, glGetQueryBufferObjectui64v,id,buffer,pname,offset)
 //STUB_FUNCTION_HEAD(void, glGetQueryBufferObjectuiv, GLuint id, GLuint buffer, GLenum pname, GLintptr offset); STUB_FUNCTION_END_NO_RETURN(void, glGetQueryBufferObjectuiv,id,buffer,pname,offset)
-STUB_FUNCTION_HEAD(void, glGetTextureSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, GLsizei bufSize, void* pixels); STUB_FUNCTION_END_NO_RETURN(void, glGetTextureSubImage,texture,level,xoffset,yoffset,zoffset,width,height,depth,format,type,bufSize,pixels)
+// STUB_FUNCTION_HEAD(void, glGetTextureSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, GLsizei bufSize, void* pixels); STUB_FUNCTION_END_NO_RETURN(void, glGetTextureSubImage,texture,level,xoffset,yoffset,zoffset,width,height,depth,format,type,bufSize,pixels)   // implemented in gl/ExtWrappers/DSAWrapper.cpp
 STUB_FUNCTION_HEAD(void, glGetCompressedTextureSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLsizei bufSize, void* pixels); STUB_FUNCTION_END_NO_RETURN(void, glGetCompressedTextureSubImage,texture,level,xoffset,yoffset,zoffset,width,height,depth,bufSize,pixels)
 //STUB_FUNCTION_HEAD(GLenum, glGetGraphicsResetStatus,void); STUB_FUNCTION_END_NO_RETURN(GLenum, glGetGraphicsResetStatus,)
 STUB_FUNCTION_HEAD(void, glGetnCompressedTexImage, GLenum target, GLint lod, GLsizei bufSize, void* pixels); STUB_FUNCTION_END_NO_RETURN(void, glGetnCompressedTexImage,target,lod,bufSize,pixels)
@@ -1511,7 +1512,12 @@ STUB_FUNCTION_HEAD(void, glMatrixMultTransposefEXT, GLenum mode, const GLfloat* 
 STUB_FUNCTION_HEAD(void, glMatrixMultTransposedEXT, GLenum mode, const GLdouble* m); STUB_FUNCTION_END_NO_RETURN(void, glMatrixMultTransposedEXT,mode,m)
 STUB_FUNCTION_HEAD(void, glNamedBufferDataEXT, GLuint buffer, GLsizeiptr size, const void* data, GLenum usage); STUB_FUNCTION_END_NO_RETURN(void, glNamedBufferDataEXT,buffer,size,data,usage)
 STUB_FUNCTION_HEAD(void, glNamedBufferSubDataEXT, GLuint buffer, GLintptr offset, GLsizeiptr size, const void* data); STUB_FUNCTION_END_NO_RETURN(void, glNamedBufferSubDataEXT,buffer,offset,size,data)
-STUB_FUNCTION_HEAD(GLboolean, glUnmapNamedBufferEXT, GLuint buffer); STUB_FUNCTION_END_NO_RETURN(GLboolean, glUnmapNamedBufferEXT,buffer)
+// EXT_direct_state_access spells this exactly like the core DSA entry point, so
+// forward instead of stubbing: a stub would answer GL_FALSE for every unmap, and
+// before that it answered whatever was left in the return register.
+GLAPI GLAPIENTRY GLboolean glUnmapNamedBufferEXT(GLuint buffer) {
+    return glUnmapNamedBuffer(buffer);
+}
 STUB_FUNCTION_HEAD(void, glGetNamedBufferParameterivEXT, GLuint buffer, GLenum pname, GLint* params); STUB_FUNCTION_END_NO_RETURN(void, glGetNamedBufferParameterivEXT,buffer,pname,params)
 STUB_FUNCTION_HEAD(void, glGetNamedBufferPointervEXT, GLuint buffer, GLenum pname, void* *params); STUB_FUNCTION_END_NO_RETURN(void, glGetNamedBufferPointervEXT,buffer,pname,*params)
 STUB_FUNCTION_HEAD(void, glGetNamedBufferSubDataEXT, GLuint buffer, GLintptr offset, GLsizeiptr size, void* data); STUB_FUNCTION_END_NO_RETURN(void, glGetNamedBufferSubDataEXT,buffer,offset,size,data)
@@ -1552,7 +1558,12 @@ STUB_FUNCTION_HEAD(void, glNamedRenderbufferStorageEXT, GLuint renderbuffer, GLe
 STUB_FUNCTION_HEAD(void, glGetNamedRenderbufferParameterivEXT, GLuint renderbuffer, GLenum pname, GLint* params); STUB_FUNCTION_END_NO_RETURN(void, glGetNamedRenderbufferParameterivEXT,renderbuffer,pname,params)
 STUB_FUNCTION_HEAD(void, glNamedRenderbufferStorageMultisampleEXT, GLuint renderbuffer, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height); STUB_FUNCTION_END_NO_RETURN(void, glNamedRenderbufferStorageMultisampleEXT,renderbuffer,samples,internalformat,width,height)
 STUB_FUNCTION_HEAD(void, glNamedRenderbufferStorageMultisampleCoverageEXT, GLuint renderbuffer, GLsizei coverageSamples, GLsizei colorSamples, GLenum internalformat, GLsizei width, GLsizei height); STUB_FUNCTION_END_NO_RETURN(void, glNamedRenderbufferStorageMultisampleCoverageEXT,renderbuffer,coverageSamples,colorSamples,internalformat,width,height)
-STUB_FUNCTION_HEAD(GLenum, glCheckNamedFramebufferStatusEXT, GLuint framebuffer, GLenum target); STUB_FUNCTION_END_NO_RETURN(GLenum, glCheckNamedFramebufferStatusEXT,framebuffer,target)
+// Same entry point as the core DSA one, and the only status a stub could invent is
+// 0, which is not GL_FRAMEBUFFER_COMPLETE either. Callers that check a framebuffer
+// before drawing to it would conclude it is unusable.
+GLAPI GLAPIENTRY GLenum glCheckNamedFramebufferStatusEXT(GLuint framebuffer, GLenum target) {
+    return glCheckNamedFramebufferStatus(framebuffer, target);
+}
 STUB_FUNCTION_HEAD(void, glNamedFramebufferTexture1DEXT, GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level); STUB_FUNCTION_END_NO_RETURN(void, glNamedFramebufferTexture1DEXT,framebuffer,attachment,textarget,texture,level)
 STUB_FUNCTION_HEAD(void, glNamedFramebufferTexture2DEXT, GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level); STUB_FUNCTION_END_NO_RETURN(void, glNamedFramebufferTexture2DEXT,framebuffer,attachment,textarget,texture,level)
 STUB_FUNCTION_HEAD(void, glNamedFramebufferTexture3DEXT, GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint zoffset); STUB_FUNCTION_END_NO_RETURN(void, glNamedFramebufferTexture3DEXT,framebuffer,attachment,textarget,texture,level,zoffset)

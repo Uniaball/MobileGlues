@@ -7,9 +7,26 @@
 
 #include "DSAWrapper.h"
 #include <cassert>
+#include <ska/flat_hash_map.hpp>
 #include "../texture.h"
+#include "../pixel.h"
+#include "../mg.h"
 
 #define DEBUG 0
+
+// LOG_D/LOG_W/LOG_E expand to nothing when GLOBAL_DEBUG is 0 (gl/log.h), which
+// is the shipping configuration, so a request this wrapper cannot carry out was
+// dropped without leaving a trace. DSA_WARN_ONCE goes through LOG_W_FORCE,
+// which is unconditional, and latches per site so a per-frame call cannot flood
+// the log.
+#define DSA_WARN_ONCE(...)                                                                                             \
+    do {                                                                                                               \
+        static bool mg_dsa_warned = false;                                                                             \
+        if (!mg_dsa_warned) {                                                                                          \
+            mg_dsa_warned = true;                                                                                      \
+            LOG_W_FORCE(__VA_ARGS__)                                                                                   \
+        }                                                                                                              \
+    } while (0)
 
 GLenum GetBindingQuery(GLenum target, bool forceTexture = false) {
     switch (target) {
@@ -110,16 +127,21 @@ GLenum GetBindingQuery(GLenum target, bool forceTexture = false) {
 }
 
 // buffer
-static thread_local ankerl::unordered_dense::map<GLenum, std::vector<GLuint>> bufferBindingStack;
+static thread_local ska::flat_hash_map<GLenum, std::vector<GLuint>> bufferBindingStack;
 void temporarilyBindBuffer(GLuint bufferID, GLenum target = GL_ARRAY_BUFFER) {
-    GLenum bindingQuery = GetBindingQuery(target);
-    GLint prev = 0;
-    glGetIntegerv(bindingQuery, &prev);
-    if (prev == bufferID) {
-        bufferBindingStack[target].push_back(-1);
-        // return;
-    }
-    bufferBindingStack[target].push_back(static_cast<GLuint>(prev));
+    // The same number glGetIntegerv(<target>_BINDING) was being asked for -- this
+    // layer's glGetIntegerv answers every buffer binding out of exactly this
+    // record -- without walking its switch to get there.
+    //
+    // It has to be the frontend name, so mg_driver_bound_buffer is the wrong
+    // accessor here: the restore below goes back through this layer's glBindBuffer,
+    // which maps to the driver name itself and re-tracks the target under whatever
+    // it was handed. Feeding it an already-mapped name would record a name the
+    // application never used, and could land on a live frontend object that happens
+    // to share the number.
+    const GLuint prev = find_bound_buffer_by_target(target);
+    // Push prev even when it is already bound: restore always pops once, and rebinding the same object is a no-op.
+    bufferBindingStack[target].push_back(prev);
 
     LOG_D("[DSA] [TempBind] target=0x%X, prev=%u -> bind=%u", target, prev, bufferID);
     CHECK_GL_ERROR;
@@ -130,11 +152,14 @@ void restoreTemporaryBufferBinding(GLenum target = GL_ARRAY_BUFFER) {
     auto it = bufferBindingStack.find(target);
     if (it == bufferBindingStack.end() || it->second.empty()) {
         LOG_D("[DSA] [Restore] no saved binding for target 0x%X", target);
-        // return;
+        // The return here was commented out, and the next line dereferences an
+        // end() iterator on the miss path. Same hole the texture stack had.
+        return;
     }
 
-    GLuint toRestore = it->second.back();
-    it->second.pop_back();
+    std::vector<GLuint>& stack = it->second;
+    GLuint toRestore = stack.back();
+    stack.pop_back();
 
     if (toRestore == static_cast<GLuint>(-1)) {
         LOG_D("[DSA] [Restore] target=0x%X, no binding to restore", target);
@@ -146,7 +171,12 @@ void restoreTemporaryBufferBinding(GLenum target = GL_ARRAY_BUFFER) {
     glBindBuffer(target, toRestore);
     CHECK_GL_ERROR_NO_INIT;
 
-    if (it->second.empty()) bufferBindingStack.erase(it);
+    // The emptied entry stays. Erasing it destroys the vector, so the next
+    // temporary bind on this target pays a fresh allocation and a hash insert to
+    // put back what was just thrown away -- and these pairs hardly ever nest, so
+    // "just emptied" is the state at the end of nearly every DSA call. Keeping it
+    // cannot grow without bound either: the keys are the handful of bind targets
+    // this file ever names.
 }
 
 void glCreateBuffers(GLsizei n, GLuint* buffers) {
@@ -426,15 +456,12 @@ void glGetNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, vo
 }
 
 // framebuffer
-static thread_local ankerl::unordered_dense::map<GLenum, std::vector<GLuint>> framebufferBindingStack;
+static thread_local ska::flat_hash_map<GLenum, std::vector<GLuint>> framebufferBindingStack;
 void temporarilyBindFramebuffer(GLuint framebufferID, GLenum target = GL_DRAW_FRAMEBUFFER) {
     GLenum bindingQuery = GetBindingQuery(target);
     GLint prev = 0;
     glGetIntegerv(bindingQuery, &prev);
-    if (prev == framebufferID) {
-        framebufferBindingStack[target].push_back(-1);
-        // return;
-    }
+    // Push prev even when it is already bound: restore always pops once, and rebinding the same object is a no-op.
     framebufferBindingStack[target].push_back(static_cast<GLuint>(prev));
     LOG_D("[DSA] [TempBind] target=0x%X, prev=%u -> bind=%u", target, prev, framebufferID);
     CHECK_GL_ERROR;
@@ -445,10 +472,13 @@ void restoreTemporaryFramebufferBinding(GLenum target = GL_DRAW_FRAMEBUFFER) {
     auto it = framebufferBindingStack.find(target);
     if (it == framebufferBindingStack.end() || it->second.empty()) {
         LOG_D("[DSA] [Restore] no saved binding for target 0x%X", target);
-        // return;
+        // The return here was commented out, and the next line dereferences an
+        // end() iterator on the miss path. Same hole the texture stack had.
+        return;
     }
-    GLuint toRestore = it->second.back();
-    it->second.pop_back();
+    std::vector<GLuint>& stack = it->second;
+    GLuint toRestore = stack.back();
+    stack.pop_back();
     if (toRestore == static_cast<GLuint>(-1)) {
         LOG_D("[DSA] [Restore] target=0x%X, no binding to restore", target);
         // return;
@@ -457,7 +487,9 @@ void restoreTemporaryFramebufferBinding(GLenum target = GL_DRAW_FRAMEBUFFER) {
     CHECK_GL_ERROR;
     glBindFramebuffer(target, toRestore);
     CHECK_GL_ERROR_NO_INIT;
-    if (it->second.empty()) framebufferBindingStack.erase(it);
+    // Emptied entries are kept, for the reason spelled out in
+    // restoreTemporaryBufferBinding: the vector's capacity is what makes the next
+    // call free, and there are only ever three keys here.
 }
 
 void glCreateFramebuffers(GLsizei n, GLuint* framebuffers) {
@@ -755,15 +787,12 @@ void glGetNamedFramebufferAttachmentParameteriv(GLuint framebuffer, GLenum attac
 }
 
 // renderbuffer
-static thread_local ankerl::unordered_dense::map<GLenum, std::vector<GLuint>> renderbufferBindingStack;
+static thread_local ska::flat_hash_map<GLenum, std::vector<GLuint>> renderbufferBindingStack;
 void temporarilyBindRenderbuffer(GLuint renderbufferID) {
     GLenum bindingQuery = GetBindingQuery(GL_RENDERBUFFER);
     GLint prev = 0;
     glGetIntegerv(bindingQuery, &prev);
-    if (prev == renderbufferID) {
-        renderbufferBindingStack[GL_RENDERBUFFER].push_back(-1);
-        // return;
-    }
+    // Push prev even when it is already bound: restore always pops once, and rebinding the same object is a no-op.
     renderbufferBindingStack[GL_RENDERBUFFER].push_back(static_cast<GLuint>(prev));
     LOG_D("[DSA] [TempBind] prev=%u -> bind=%u", prev, renderbufferID);
     CHECK_GL_ERROR;
@@ -774,10 +803,13 @@ void restoreTemporaryRenderbufferBinding() {
     auto it = renderbufferBindingStack.find(GL_RENDERBUFFER);
     if (it == renderbufferBindingStack.end() || it->second.empty()) {
         LOG_D("[DSA] [Restore] no saved binding for GL_RENDERBUFFER");
-        // return;
+        // The return here was commented out, and the next line dereferences an
+        // end() iterator on the miss path. Same hole the texture stack had.
+        return;
     }
-    GLuint toRestore = it->second.back();
-    it->second.pop_back();
+    std::vector<GLuint>& stack = it->second;
+    GLuint toRestore = stack.back();
+    stack.pop_back();
     if (toRestore == static_cast<GLuint>(-1)) {
         LOG_D("[DSA] [Restore] no binding to restore for GL_RENDERBUFFER");
         // return;
@@ -786,7 +818,8 @@ void restoreTemporaryRenderbufferBinding() {
     CHECK_GL_ERROR;
     glBindRenderbuffer(GL_RENDERBUFFER, toRestore);
     CHECK_GL_ERROR_NO_INIT;
-    if (it->second.empty()) renderbufferBindingStack.erase(it);
+    // Kept for the reason restoreTemporaryBufferBinding gives. There is exactly one
+    // key in this map.
 }
 
 void glCreateRenderbuffers(GLsizei n, GLuint* renderbuffers) {
@@ -869,22 +902,61 @@ void glGetNamedRenderbufferParameteriv(GLuint renderbuffer, GLenum pname, GLint*
 }
 
 // texture
-static thread_local ankerl::unordered_dense::map<GLenum, std::vector<GLuint>> textureBindingStack;
+static thread_local ska::flat_hash_map<GLenum, std::vector<GLuint>> textureBindingStack;
 
+// 0 when this layer has no record for the name.
+//
+// It used to dereference mgGetTexObjectByID's result straight away, which is null
+// for name 0, for a name that came out of glGenTextures and was never bound, and
+// for one that has already been deleted. Those are not exotic: unbinding with
+// glBindTextureUnit(unit, 0) is valid GL, and the other two are cases desktop GL
+// answers with GL_INVALID_OPERATION -- a recoverable error, not a segfault in the
+// driver layer. Every caller now checks.
 GLenum GetTexTarget(GLuint texture) {
-    return ConvertTextureTargetToGLEnum(mgGetTexObjectByID(texture)->target);
+    const TextureObject* obj = mgGetTexObjectByID(texture);
+    return obj ? ConvertTextureTargetToGLEnum(obj->target) : 0;
 }
 
+// The shared reject path: the name is not one this layer can act on, so raise the
+// error GL specifies and touch nothing.
+bool mgRejectUnknownTexture(const char* what, GLuint texture, GLenum target) {
+    if (target != 0) return false;
+    // An application that keeps a stale name in a per-frame path hits this twice
+    // per operation -- once for the operation's own check and once inside
+    // temporarilyBindTexture -- through LOG_W_FORCE, which no build configuration
+    // silences. The first line says everything the hundredth would, so latch it the
+    // way the rest of this file does.
+    DSA_WARN_ONCE("[DSA] %s: %u is not a texture name this layer knows about (reported once)", what, texture);
+    mg_set_gl_error(GL_INVALID_OPERATION);
+    return true;
+}
+
+// possibleTarget lets a caller that has already resolved the name pass its answer
+// in; GetTexTarget is a table lookup plus an enum conversion and the bind/restore
+// pair would otherwise repeat it. Passing it also pins the target across the
+// operation, so the restore pops the stack entry the bind pushed even if what the
+// object records in between has moved.
 void temporarilyBindTexture(GLuint textureID, GLenum possibleTarget = 0) {
     GLenum target = possibleTarget ? possibleTarget : GetTexTarget(textureID);
-    GLenum bindingQuery = GetBindingQuery(target, true);
-    GLint prev = 0;
-    glGetIntegerv(bindingQuery, &prev);
-    if (prev == static_cast<GLint>(textureID)) {
-        textureBindingStack[target].push_back(-1);
-        // return;
+    if (mgRejectUnknownTexture("temporarilyBindTexture", textureID, target)) return;
+    // Texture names are not renamed across this boundary, so the tracked driver
+    // binding is both what glGetIntegerv(<target>_BINDING) would report and what
+    // the restore below has to hand to glBindTexture. It answers for the driver's
+    // active unit, which is the unit that glBindTexture will restore onto: the two
+    // only differ inside this layer's own borrow windows, and a DSA entry point is
+    // never called from inside one.
+    //
+    // False means the shadow cannot be believed at all right now -- FSR1 leaks a
+    // binding on unit 0 once a frame -- and then there is no substitute for asking
+    // the driver.
+    GLuint prev = 0;
+    if (!mg_driver_texture_binding(target, &prev)) {
+        GLint queried = 0;
+        glGetIntegerv(GetBindingQuery(target, true), &queried);
+        prev = static_cast<GLuint>(queried);
     }
-    textureBindingStack[target].push_back(static_cast<GLuint>(prev));
+    // Push prev even when it is already bound: restore always pops once, and rebinding the same object is a no-op.
+    textureBindingStack[target].push_back(prev);
     LOG_D("[DSA] [TempBind] target=0x%X, prev=%u -> bind=%u", target, prev, textureID);
     CHECK_GL_ERROR;
     glBindTexture(target, textureID);
@@ -893,26 +965,36 @@ void temporarilyBindTexture(GLuint textureID, GLenum possibleTarget = 0) {
 
 void restoreTemporaryTextureBinding(GLuint textureID, GLenum possibleTarget = 0) {
     GLenum target = possibleTarget ? possibleTarget : GetTexTarget(textureID);
+    // Nothing was pushed for an unknown name, because temporarilyBindTexture
+    // rejected it. Falling through would look for a stack entry that is not there.
+    if (target == 0) return;
     auto stackIt = textureBindingStack.find(target);
     if (stackIt == textureBindingStack.end() || stackIt->second.empty()) {
         LOG_D("[DSA] [Restore] no saved binding for target 0x%X", target);
-        // return;
+        // The return here was commented out, and the very next line dereferences
+        // stackIt -- an end() iterator on the miss path. Unreachable while every
+        // bind pushed unconditionally; now that a rejected name pushes nothing, a
+        // caller that pairs bind and restore by hand can reach it.
+        return;
     }
 
-    GLuint toRestore = stackIt->second.back();
-    stackIt->second.pop_back();
+    std::vector<GLuint>& stack = stackIt->second;
+    GLuint toRestore = stack.back();
+    stack.pop_back();
     if (toRestore == static_cast<GLuint>(-1)) {
+        // Sentinel for "there was nothing bound". The entry is consumed either
+        // way; binding 0xFFFFFFFF as a texture name is not the alternative.
         LOG_D("[DSA] [Restore] target=0x%X, no binding to restore", target);
-        // return;
+        return;
     }
     LOG_D("[DSA] [Restore] target=0x%X, bind back to %u", target, toRestore);
     CHECK_GL_ERROR;
     glBindTexture(target, toRestore);
     CHECK_GL_ERROR_NO_INIT;
 
-    if (stackIt->second.empty()) {
-        textureBindingStack.erase(stackIt);
-    }
+    // Kept for the reason restoreTemporaryBufferBinding gives, and it matters most
+    // here: the texture entry points are the ones a frame actually repeats, and the
+    // keys are the few targets textures are bound to.
 }
 
 void glCreateTextures(GLenum target, GLsizei n, GLuint* textures) {
@@ -949,10 +1031,14 @@ void glTextureBuffer(GLuint texture, GLenum internalformat, GLuint buffer) {
         // return;
     }
 
-    temporarilyBindTexture(texture);
+    // Resolved once for both halves; 0 for a name this layer does not know, which
+    // temporarilyBindTexture rejects and restoreTemporaryTextureBinding then leaves
+    // alone.
+    const GLenum target = GetTexTarget(texture);
+    temporarilyBindTexture(texture, target);
     glTexBuffer(GL_TEXTURE_BUFFER, internalformat, buffer);
     CHECK_GL_ERROR;
-    restoreTemporaryTextureBinding(texture);
+    restoreTemporaryTextureBinding(texture, target);
 
     LOG_D("[DSA] Set buffer for texture %u with internal format 0x%X", texture, internalformat);
 }
@@ -967,24 +1053,30 @@ void glTextureBufferRange(GLuint texture, GLenum internalformat, GLuint buffer, 
         // return;
     }
 
-    temporarilyBindTexture(texture);
+    const GLenum target = GetTexTarget(texture);
+    temporarilyBindTexture(texture, target);
     glTexBufferRange(GL_TEXTURE_BUFFER, internalformat, buffer, offset, size);
     CHECK_GL_ERROR;
-    restoreTemporaryTextureBinding(texture);
+    restoreTemporaryTextureBinding(texture, target);
 
     LOG_D("[DSA] Set buffer range for texture %u with internal format 0x%X and size %lld at offset %lld", texture,
           internalformat, size, offset);
 }
 
+// `target` is resolved once and handed to both halves. It used to be worked out
+// three times per operation -- here, in temporarilyBindTexture and again in
+// restoreTemporaryTextureBinding -- from a name whose record cannot change while
+// the operation between them runs.
 #define TEXTURE_OP_FUNC_BEGIN(func_name)                                                                               \
     LOG()                                                                                                              \
     LOG_D(#func_name ", texture: %u", texture);                                                                        \
     GLenum target = GetTexTarget(texture);                                                                             \
-    temporarilyBindTexture(texture);
+    if (mgRejectUnknownTexture(#func_name, texture, target)) return;                                                   \
+    temporarilyBindTexture(texture, target);
 
 #define TEXTURE_OP_FUNC_END                                                                                            \
     CHECK_GL_ERROR;                                                                                                    \
-    restoreTemporaryTextureBinding(texture);
+    restoreTemporaryTextureBinding(texture, target);
 
 void glTextureStorage1D(GLuint texture, GLsizei levels, GLenum internalformat, GLsizei width) {
     TEXTURE_OP_FUNC_BEGIN(glTextureStorage1D)
@@ -1163,31 +1255,406 @@ void glBindTextureUnit(GLuint unit, GLuint texture) {
     LOG()
     LOG_D("[DSA] glBindTextureUnit, unit: %u, texture: %u", unit, texture);
 
-    if (unit >= GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) {
-        LOG_W("[DSA] Invalid parameters for glBindTextureUnit");
-        // return;
+    // Against the limit, not against the enum that names it. This compared a unit
+    // index with GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS itself -- 0x8B4D, so the test
+    // could never fire -- and had its return commented out besides, so an
+    // out-of-range unit fell through to glActiveTexture(GL_TEXTURE0 + unit) and
+    // bound the texture somewhere the layer does not track. GL 4.5 asks for
+    // GL_INVALID_VALUE.
+    //
+    // The limit itself is a device property capped by this layer's own maximum
+    // (see the GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS case in gl/getter.cpp), so it
+    // cannot change under a running process and is worth asking for exactly once.
+    // Two threads arriving together both write the same value, so the unguarded
+    // initialisation is harmless.
+    static GLint maxUnits = 0;
+    if (maxUnits == 0) {
+        glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+        if (maxUnits <= 0) maxUnits = 16;
     }
-    GLint prevUnit = 0;
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+    if (unit >= static_cast<GLuint>(maxUnits)) {
+        LOG_W_FORCE("[DSA] glBindTextureUnit: unit %u is past the %d this layer tracks", unit, maxUnits);
+        mg_set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    // The unit the driver is on, tracked as this layer issues glActiveTexture,
+    // rather than a GL_ACTIVE_TEXTURE round trip -- this layer's glGetIntegerv has
+    // no case for that enum and hands it straight to the driver. It agrees with
+    // gl_state->current_tex_unit at an application entry point; the windows where
+    // the two differ are all inside this layer, and none of them calls a DSA
+    // wrapper.
+    const GLenum prevUnit = GL_TEXTURE0 + static_cast<GLuint>(mg_driver_active_texture_unit());
+    // Binding onto the unit already selected: both glActiveTexture calls would be
+    // round trips that change nothing, and the pair is the whole cost of this
+    // function for the texture != 0 case.
+    const bool sameUnit = prevUnit == GL_TEXTURE0 + unit;
+
+    if (texture == 0) {
+        // A valid unbind, and the one call in this file that was guaranteed to
+        // crash: there is no record for name 0 to read a target out of. GL 4.5
+        // says zero "resets each of the targets to its default texture", so undo
+        // them all rather than guessing which one the unit was holding.
+        if (!sameUnit) glActiveTexture(GL_TEXTURE0 + unit);
+        static const GLenum k_unbind_targets[] = {GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_2D_ARRAY,
+                                                  GL_TEXTURE_CUBE_MAP};
+        for (GLenum t : k_unbind_targets) {
+            glBindTexture(t, 0);
+        }
+        if (hardware != nullptr && hardware->es_version >= 310) {
+            glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+        }
+        if (!sameUnit) glActiveTexture(prevUnit);
+        LOG_D("[DSA] Unbound texture unit %u", unit);
+        return;
+    }
+
     GLenum target = GetTexTarget(texture);
-    glActiveTexture(GL_TEXTURE0 + unit);
+    if (mgRejectUnknownTexture("glBindTextureUnit", texture, target)) return;
+    if (!sameUnit) glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(target, texture);
-    glActiveTexture(prevUnit);
+    if (!sameUnit) glActiveTexture(prevUnit);
     LOG_D("[DSA] Bound texture %u to texture unit %u", texture, unit);
+}
+
+// With a pack buffer bound every `pixels` argument is an offset, so a null one
+// means "start of the buffer" rather than "no destination".
+static bool mgPackBufferBound() {
+    GLint pbo = 0;
+    GLES.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+    return pbo != 0;
+}
+
+// The pack state the driver will use, resolved once.
+struct mg_pack_state_t {
+    size_t row_bytes = 0;   // stride between rows
+    size_t image_bytes = 0; // stride between images, rows * height
+    size_t start = 0;       // offset of the first texel, from the skips
+    size_t span = 0;        // furthest byte one image actually reaches, skips included
+    bool ok = false;
+};
+
+// How much room one width x height image needs under the current pack state.
+//
+// `span` counts the last row in full rather than by its stride: rows advance by
+// row_bytes but write width texels, and GL_PACK_ROW_LENGTH may be smaller than
+// the image, in which case the final row reaches past the last stride. GL's own
+// required-size formula counts it the same way.
+static mg_pack_state_t mgPackState(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+    mg_pack_state_t s;
+    const GLsizei texelSize = pixel_sizeof(format, type);
+    if (texelSize <= 0 || width <= 0 || height <= 0) return s;
+
+    GLint packAlign = 4, packRowLength = 0;
+    GLES.glGetIntegerv(GL_PACK_ALIGNMENT, &packAlign);
+    GLES.glGetIntegerv(GL_PACK_ROW_LENGTH, &packRowLength);
+    if (packAlign <= 0) packAlign = 1;
+
+    const size_t rowPixels = static_cast<size_t>(packRowLength > 0 ? packRowLength : width);
+    s.row_bytes = widthalign(rowPixels * static_cast<size_t>(texelSize), packAlign);
+    // GL_PACK_IMAGE_HEIGHT, when set, is the row count consecutive images are laid
+    // out by -- not the image's own height. GLES has no such parameter, so this
+    // reads the shadow gl/pixel.cpp keeps for it; before that shadow existed there
+    // was nothing to read and the stride was always the height.
+    GLint packImageHeight = 0;
+    mg_pixel_store_query_int(GL_PACK_IMAGE_HEIGHT, &packImageHeight);
+    const size_t imageRows =
+        packImageHeight > 0 ? static_cast<size_t>(packImageHeight) : static_cast<size_t>(height);
+    s.image_bytes = s.row_bytes * imageRows;
+
+    // The skips push the first texel forward, and glReadPixels applies them for
+    // real -- so a size check that ignores them is short by exactly that offset
+    // and accepts a buffer the read then overruns. They belong in span, not in the
+    // strides, which the per-slice advance uses.
+    GLint skipRows = 0, skipPixels = 0;
+    GLES.glGetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
+    GLES.glGetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
+    if (skipRows < 0) skipRows = 0;
+    if (skipPixels < 0) skipPixels = 0;
+    s.start = static_cast<size_t>(skipRows) * s.row_bytes + static_cast<size_t>(skipPixels) * texelSize;
+
+    const size_t lastRow = static_cast<size_t>(width) * static_cast<size_t>(texelSize);
+    s.span = s.start + s.row_bytes * static_cast<size_t>(height - 1) + lastRow;
+    s.ok = true;
+    return s;
+}
+
+// GL 4.6 hands back all six cube map faces from one glGetTextureImage, laid out
+// consecutively like a 2D array of six layers, but glGetTexImage can only read
+// one face at a time. Walk the faces and advance the destination by one face
+// image between them. The stride has to be the one glReadPixels will use inside
+// glGetTexImage, or every face after the first lands at the wrong offset.
+static void ReadCubeMapFaces(GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
+    static const GLenum faces[6] = {GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+                                    GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+                                    GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z};
+
+    // With a pack buffer bound, `pixels` is an offset into it and zero is a
+    // perfectly ordinary one. Treating null as "no destination" dropped every
+    // PBO readback that started at the beginning of the buffer -- the upload side
+    // has always drawn this distinction (mg_upload_has_data).
+    if (!pixels && !mgPackBufferBound()) {
+        DSA_WARN_ONCE("[DSA] glGetTextureImage: cube map readback with pixels == NULL, dropped");
+        mg_set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    GLint width = 0, height = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_CUBE_MAP_POSITIVE_X, level, GL_TEXTURE_WIDTH, &width);
+    glGetTexLevelParameteriv(GL_TEXTURE_CUBE_MAP_POSITIVE_X, level, GL_TEXTURE_HEIGHT, &height);
+    if (width <= 0 || height <= 0) {
+        DSA_WARN_ONCE("[DSA] glGetTextureImage: cube map level %d has no size, dropped", level);
+        mg_set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    // Without a texel size there is no face stride, so the faces cannot be
+    // placed. Guessing one would scatter five of the six faces.
+    const GLsizei texelSize = pixel_sizeof(format, type);
+    if (texelSize <= 0) {
+        DSA_WARN_ONCE("[DSA] glGetTextureImage: cannot size format 0x%X / type 0x%X for a cube map, dropped", format,
+                      type);
+        mg_set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    // The skip parameters offset the start of *an image*; applying them once per
+    // face, which is what six separate reads would do, is not the layout the
+    // caller asked for. Nothing here can undo that, so drop instead.
+    // GL_PACK_SKIP_IMAGES is not a GLES parameter -- querying it fails and leaves
+    // the variable at zero, so it was never part of this guard. There is nothing
+    // to guard against either: without the parameter the driver cannot hold a
+    // non-zero value for it, and the layer does not emulate one.
+    GLint skipPixels = 0, skipRows = 0;
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
+    if (skipPixels || skipRows) {
+        DSA_WARN_ONCE("[DSA] glGetTextureImage: cube map readback with non-zero GL_PACK_SKIP_*, dropped");
+        mg_set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    GLint packAlign = 4, packRowLength = 0;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &packAlign);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &packRowLength);
+    if (packAlign <= 0) packAlign = 1;
+
+    const size_t rowPixels = static_cast<size_t>(packRowLength > 0 ? packRowLength : width);
+    const size_t rowBytes = widthalign(rowPixels * static_cast<size_t>(texelSize), packAlign);
+    const size_t faceBytes = rowBytes * static_cast<size_t>(height);
+
+    // The face pointers are computed here rather than by the driver, so a buffer
+    // that cannot hold six faces would be written past its end.
+    //
+    // Six strides is not the whole story. Rows advance by rowBytes but each one
+    // still writes width texels, and GL_PACK_ROW_LENGTH is allowed to be smaller
+    // than the image -- when it is, the final row of the final face reaches past
+    // six strides by exactly that difference. Six-strides-only accepted buffers
+    // that were then overrun; GL's own required-size formula counts the last row
+    // in full, which is what this does.
+    const size_t lastRowBytes = static_cast<size_t>(width) * static_cast<size_t>(texelSize);
+    const size_t overhang = lastRowBytes > rowBytes ? lastRowBytes - rowBytes : 0;
+    const size_t required = faceBytes * 6 + overhang;
+    if (bufSize <= 0 || required > static_cast<size_t>(bufSize)) {
+        DSA_WARN_ONCE("[DSA] glGetTextureImage: bufSize %d too small for six cube map faces (%zu bytes needed), "
+                      "dropped",
+                      bufSize, required);
+        mg_set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    auto* out = static_cast<uint8_t*>(pixels);
+    for (GLenum face : faces) {
+        glGetTexImage(face, level, format, type, out);
+        out += faceBytes;
+    }
 }
 
 void glGetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
     TEXTURE_OP_FUNC_BEGIN(glGetTextureImage)
-    glGetTexImage(target, level, format, type, pixels);
+    // glGetTexImage understands GL_TEXTURE_2D and a single cube map face and
+    // nothing else: it returns with the destination untouched for every other
+    // target, so the caller was told it had a full image when it had whatever
+    // was already in its buffer. Only the shapes that can be expressed in terms
+    // of those two reads are attempted; the rest say so.
+    if (target == GL_TEXTURE_CUBE_MAP) {
+        ReadCubeMapFaces(level, format, type, bufSize, pixels);
+    } else if (target == GL_TEXTURE_2D) {
+        // bufSize is a contract, not decoration. glGetTexImage below reads the
+        // whole level with glReadPixels straight into this pointer, so passing it
+        // on unchecked -- which is what happened, while the cube map path above
+        // checked -- let an undersized buffer be written far past its end. GL 4.5
+        // requires GL_INVALID_OPERATION and no write instead, and the 2D path is
+        // the common one.
+        if (!pixels && !mgPackBufferBound()) {
+            DSA_WARN_ONCE("[DSA] glGetTextureImage: 2D readback with pixels == NULL, dropped");
+            mg_set_gl_error(GL_INVALID_VALUE);
+            TEXTURE_OP_FUNC_END
+            return;
+        }
+        GLint w = 0, h = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH, &w);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &h);
+        const mg_pack_state_t pack = mgPackState(w, h, format, type);
+        if (!pack.ok) {
+            DSA_WARN_ONCE("[DSA] glGetTextureImage: cannot size format 0x%X / type 0x%X at level %d, dropped", format,
+                          type, level);
+            mg_set_gl_error(GL_INVALID_ENUM);
+        } else if (bufSize < 0 || pack.span > static_cast<size_t>(bufSize)) {
+            DSA_WARN_ONCE("[DSA] glGetTextureImage: bufSize %d too small for a %dx%d level (%zu bytes needed), dropped",
+                          bufSize, w, h, pack.span);
+            mg_set_gl_error(GL_INVALID_OPERATION);
+        } else {
+            glGetTexImage(target, level, format, type, pixels);
+        }
+    } else {
+        DSA_WARN_ONCE("[DSA] glGetTextureImage: target %s cannot be read back, dropped", glEnumToString(target));
+        mg_set_gl_error(GL_INVALID_OPERATION);
+    }
     TEXTURE_OP_FUNC_END
     LOG_D("[DSA] Retrieved texture image from texture %u at level %d", texture, level);
 }
 
+// GL 4.5's region readback, which was a silent stub -- exported, resolvable, and
+// writing nothing, next door to a glGetTextureImage that really works. A caller
+// asking for a sub-rectangle got its buffer back untouched and no error.
+//
+// Built the same way glGetTexImage is: attach the slice to a scratch framebuffer
+// and glReadPixels the region out of it. That covers 2D, cube map faces, array
+// layers and 3D slices; anything else, and any format the read rejects, says so
+// rather than pretending.
+void glGetTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
+                          GLsizei height, GLsizei depth, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
+    LOG()
+    LOG_D("[DSA] glGetTextureSubImage, texture: %u, level: %d, offset: %d,%d,%d, size: %dx%dx%d", texture, level,
+          xoffset, yoffset, zoffset, width, height, depth);
+
+    const GLenum target = GetTexTarget(texture);
+    if (mgRejectUnknownTexture("glGetTextureSubImage", texture, target)) return;
+
+    if (width <= 0 || height <= 0 || depth <= 0 || xoffset < 0 || yoffset < 0 || zoffset < 0) {
+        mg_set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!pixels && !mgPackBufferBound()) {
+        mg_set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    const mg_pack_state_t pack = mgPackState(width, height, format, type);
+    if (!pack.ok) {
+        DSA_WARN_ONCE("[DSA] glGetTextureSubImage: cannot size format 0x%X / type 0x%X, dropped", format, type);
+        mg_set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    // The skips offset the start of ONE image. This walks the slices itself and
+    // each per-slice glReadPixels would apply them again, putting every slice at
+    // the wrong offset and reaching past the size checked below. Nothing here can
+    // undo that, so drop -- the same call ReadCubeMapFaces makes for the same
+    // reason.
+    GLint skipPixels = 0, skipRows = 0;
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
+    if (skipPixels || skipRows) {
+        DSA_WARN_ONCE("[DSA] glGetTextureSubImage: non-zero GL_PACK_SKIP_*, dropped");
+        mg_set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    // Slices are laid out consecutively, and only the last one's final row can
+    // reach past its stride.
+    const size_t required = pack.image_bytes * static_cast<size_t>(depth - 1) + pack.span;
+    if (bufSize < 0 || required > static_cast<size_t>(bufSize)) {
+        DSA_WARN_ONCE("[DSA] glGetTextureSubImage: bufSize %d too small (%zu bytes needed), dropped", bufSize,
+                      required);
+        mg_set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    // How a slice of this target gets onto a colour attachment.
+    enum class slice_t { Flat, CubeFace, Layered } slice;
+    switch (target) {
+    case GL_TEXTURE_2D:
+        if (zoffset != 0 || depth != 1) {
+            mg_set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+        slice = slice_t::Flat;
+        break;
+    case GL_TEXTURE_CUBE_MAP:
+        if (zoffset + depth > 6) {
+            mg_set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+        slice = slice_t::CubeFace;
+        break;
+    case GL_TEXTURE_2D_ARRAY:
+    case GL_TEXTURE_3D:
+        slice = slice_t::Layered;
+        break;
+    default:
+        DSA_WARN_ONCE("[DSA] glGetTextureSubImage: target %s cannot be read back, dropped", glEnumToString(target));
+        mg_set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    static const GLenum k_faces[6] = {GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+                                      GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+                                      GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z};
+
+    GLint prevDrawFBO = 0, prevReadFBO = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+
+    GLuint tempFBO = 0;
+    glGenFramebuffers(1, &tempFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, tempFBO);
+
+    auto* out = static_cast<uint8_t*>(pixels);
+    bool failed = false;
+    for (GLsizei i = 0; i < depth; ++i) {
+        const GLint z = zoffset + i;
+        switch (slice) {
+        case slice_t::Flat:
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, level);
+            break;
+        case slice_t::CubeFace:
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, k_faces[z], texture, level);
+            break;
+        case slice_t::Layered:
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, level, z);
+            break;
+        }
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            // Depth, stencil and the integer-only formats a colour attachment
+            // cannot hold end up here.
+            DSA_WARN_ONCE("[DSA] glGetTextureSubImage: level %d of texture %u is not colour-readable, dropped", level,
+                          texture);
+            failed = true;
+            break;
+        }
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glReadPixels(xoffset, yoffset, width, height, format, type, out);
+        out += pack.image_bytes;
+    }
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
+    glDeleteFramebuffers(1, &tempFBO);
+    if (failed) mg_set_gl_error(GL_INVALID_OPERATION);
+}
+
 void glGetCompressedTextureImage(GLuint texture, GLint level, GLsizei bufSize, void* pixels) {
     TEXTURE_OP_FUNC_BEGIN(glGetCompressedTextureImage)
-    glGetCompressedTexImage(target, level, pixels);
+    (void)bufSize;
+    (void)pixels;
+    // glGetCompressedTexImage is a do-nothing stub, so this wrote nothing, ignored
+    // bufSize, and then logged "Retrieved compressed texture image" -- the one
+    // quiet failure in this file that actively claimed to have succeeded. An
+    // application caching compressed levels to disk wrote uninitialised memory and
+    // re-uploaded it as texture data on the next run.
+    DSA_WARN_ONCE("[DSA] glGetCompressedTextureImage: compressed readback is not implemented, nothing written");
+    mg_set_gl_error(GL_INVALID_OPERATION);
     TEXTURE_OP_FUNC_END
-    LOG_D("[DSA] Retrieved compressed texture image from texture %u at level %d", texture, level);
 }
 
 void glGetTextureLevelParameterfv(GLuint texture, GLint level, GLenum pname, GLfloat* params) {
@@ -1641,10 +2108,7 @@ static void pushXFB(GLuint xfb) {
     LOG_D("[DSA] pushXFB, xfb: %u", xfb);
     GLint prev = 0;
     glGetIntegerv(GL_TRANSFORM_FEEDBACK_BINDING, &prev);
-    if (xfb == prev) {
-        g_xfbBindingStack.push_back(-1);
-        // return;
-    }
+    // Push prev even when it is already bound: popXFB always pops once, and rebinding the same object is a no-op.
     g_xfbBindingStack.push_back(prev);
     glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, xfb);
     CHECK_GL_ERROR;
@@ -1704,6 +2168,10 @@ GLAPI void glTransformFeedbackBufferRange(GLuint xfb, GLuint index, GLuint buffe
     LOG_D("[DSA] Bound buffer %u to TFBO %u at index %u (offset=%lld, size=%lld)", buffer, xfb, index, offset, size);
 }
 
+// ES has no glGetTransformFeedback*v, so the three queries below read the object pushXFB has just made
+// current through the glGetInteger* family instead. They used to call themselves with GL_TRANSFORM_FEEDBACK
+// as the object name -- nothing broke the recursion, so any call ran the stack out and rebound the XFB object
+// on the way down.
 GLAPI void glGetTransformFeedbackiv(GLuint xfb, GLenum pname, GLint* param) {
     LOG();
     LOG_D("[DSA] glGetTransformFeedbackiv, xfb=%u, pname=0x%X, param=%p", xfb, pname, param);
@@ -1712,7 +2180,7 @@ GLAPI void glGetTransformFeedbackiv(GLuint xfb, GLenum pname, GLint* param) {
         // return;
     }
     pushXFB(xfb);
-    glGetTransformFeedbackiv(GL_TRANSFORM_FEEDBACK, pname, param);
+    GLES.glGetIntegerv(pname, param);
     CHECK_GL_ERROR;
     popXFB();
     LOG_D("[DSA] Retrieved TFBO %u param 0x%X = %d", xfb, pname, *param);
@@ -1726,7 +2194,7 @@ GLAPI void glGetTransformFeedbacki_v(GLuint xfb, GLenum pname, GLuint index, GLi
         // return;
     }
     pushXFB(xfb);
-    glGetTransformFeedbacki_v(GL_TRANSFORM_FEEDBACK, pname, index, param);
+    GLES.glGetIntegeri_v(pname, index, param);
     CHECK_GL_ERROR;
     popXFB();
     LOG_D("[DSA] Retrieved TFBO %u param 0x%X at index %u = %d", xfb, pname, index, *param);
@@ -1740,7 +2208,7 @@ GLAPI void glGetTransformFeedbacki64_v(GLuint xfb, GLenum pname, GLuint index, G
         // return;
     }
     pushXFB(xfb);
-    glGetTransformFeedbacki64_v(GL_TRANSFORM_FEEDBACK, pname, index, param);
+    GLES.glGetInteger64i_v(pname, index, param);
     CHECK_GL_ERROR;
     popXFB();
     LOG_D("[DSA] Retrieved TFBO %u param 0x%X at index %u = %lld", xfb, pname, index, *param);

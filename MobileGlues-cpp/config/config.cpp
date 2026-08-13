@@ -9,6 +9,7 @@
 #include "../gl/log.h"
 #include "../gl/mg.h"
 #include "cJSON.h"
+#include "stats.h"
 #include <cerrno>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +47,7 @@ int check_path() {
     config_file_path = concatenate(mg_directory_path, "/config.json");
     log_file_path = concatenate(mg_directory_path, "/latest.log");
     glsl_cache_file_path = concatenate(mg_directory_path, "/glsl_cache.tmp");
+    stats_file_path = concatenate(mg_directory_path, "/stats.json");
 
     if (mkdir(mg_directory_path, 0755) != 0 && errno != EEXIST) {
         LOG_E("Error creating MG directory.\n")

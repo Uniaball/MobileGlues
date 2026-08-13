@@ -16,7 +16,6 @@
 #include <iostream>
 #include <cstdint>
 #include "../config/settings.h"
-#include <ankerl/unordered_dense.h>
 #include "drawing.h"
 #include "glsl/glsl_for_es.h"
 
@@ -43,8 +42,8 @@ UnorderedMap<GLuint, ShouldGenerateFSState> program_map_should_generate_fs;
 std::unordered_map<GLuint, int> g_programIgnoreErrorLevel;
 std::unordered_map<GLuint, std::vector<std::pair<GLuint, std::string>>> g_programFragDataBindings;
 
-char* updateLayoutLocation(const char* esslSource, GLuint color, const char* name) {
-    std::string shaderCode(esslSource);
+std::string updateLayoutLocation(const std::string& esslSource, GLuint color, const char* name) {
+    const std::string& shaderCode = esslSource;
 
     std::string pattern = std::string(R"((layout\s*$[^)]*location\s*=\s*\d+[^)]*$\s*)?)") +
                           R"(out\s+((?:highp|mediump|lowp|\w+\s+)*\w+)\s+)" + name + R"(\s*;)";
@@ -54,15 +53,35 @@ char* updateLayoutLocation(const char* esslSource, GLuint color, const char* nam
     std::regex reg(pattern);
     std::string modifiedCode = std::regex_replace(shaderCode, reg, replacement);
 
-    char* result = new char[modifiedCode.size() + 1];
-    strcpy(result, modifiedCode.c_str());
-    return result;
+    return modifiedCode;
 }
 
 void glBindFragDataLocation(GLuint program, GLuint color, const GLchar* name) {
     LOG()
     LOG_D("glBindFragDataLocation(%d, %d, %s)", program, color, name)
 
+    if (strlen(name) > 8 && strncmp(name, "outColor", 8) == 0) {
+        const char* numberStr = name + 8;
+        bool isNumber = true;
+        for (int i = 0; numberStr[i] != '\0'; ++i) {
+            if (!isdigit(numberStr[i])) {
+                isNumber = false;
+                break;
+            }
+        }
+
+        if (isNumber) {
+            unsigned int extractedColor = static_cast<unsigned int>(std::stoul(numberStr));
+            if (extractedColor == color) {
+                // outColor was bound in glsl process. exit now
+                LOG_D("Find outColor* with color *, skipping")
+                return;
+            }
+        }
+    }
+
+    // Applied at link time: glBindFragDataLocation only names the program, and
+    // which fragment shader it will attach is not known until glLinkProgram.
     g_programFragDataBindings[program].push_back({color, std::string(name)});
 }
 
@@ -88,7 +107,6 @@ static UnorderedMap<unsigned, GLuint> DefaultFSMap;
 void glLinkProgram(GLuint program) {
     LOG()
     LOG_D("glLinkProgram(%d)", program)
-
     GLint numShaders = 0;
     GLES.glGetProgramiv(program, GL_ATTACHED_SHADERS, &numShaders);
     GLuint fragShader = 0;
@@ -113,18 +131,16 @@ void glLinkProgram(GLuint program) {
             if (bindIt != g_programFragDataBindings.end() && !bindIt->second.empty()) {
                 std::string modifiedSource = info.converted;
                 for (const auto& binding : bindIt->second) {
-                    char* patched = updateLayoutLocation(modifiedSource.c_str(), binding.first, binding.second.c_str());
-                    if (patched) {
-                        modifiedSource = patched;
-                        free(patched);
-                    }
+                    modifiedSource = updateLayoutLocation(modifiedSource, binding.first, binding.second.c_str());
                 }
                 info.frag_data_changed_converted = modifiedSource;
                 info.frag_data_changed = 1;
             }
 
             if (info.frag_data_changed) {
-                const char* src = info.frag_data_changed_converted.empty() ? info.converted.c_str() : info.frag_data_changed_converted.c_str();
+                const char* src = info.frag_data_changed_converted.empty()
+                                      ? info.converted.c_str()
+                                      : info.frag_data_changed_converted.c_str();
                 GLES.glShaderSource(fragShader, 1, &src, nullptr);
                 GLES.glCompileShader(fragShader);
                 GLint status = 0;
@@ -287,3 +303,47 @@ GLuint glCreateProgram() {
     CHECK_GL_ERROR
     return program;
 }
+
+// GL 3.1's name-only half of the active-uniform query, on top of the ES call that
+// already returns the same string.
+//
+// It was a stub -- a no-op that wrote neither the name nor the length and, being a
+// stub rather than an error, left glGetError clean. Callers got whatever was
+// already in the buffer they passed.
+//
+// That is not a cosmetic gap. The standard way to build a name -> location map is
+// to walk the active uniforms by index and ask for each name, and a caller doing
+// that ended up with a map keyed on garbage: every later lookup missed, so the
+// uniforms never got set and kept whatever the driver had zero-initialised them
+// to. NeoForge's early loading window does exactly this, and a screenSize of
+// (0, 0) turned its every vertex into a division by zero -- gl_Position came out
+// non-finite, every primitive was discarded, and the window rendered black with
+// nothing anywhere reporting a problem.
+void glGetActiveUniformName(GLuint program, GLuint uniformIndex, GLsizei bufSize, GLsizei* length,
+                            GLchar* uniformName) {
+    LOG()
+    LOG_D("glGetActiveUniformName(program: %u, index: %u, bufSize: %d)", program, uniformIndex, bufSize)
+
+    if (length) *length = 0;
+    if (bufSize <= 0 || uniformName == nullptr) {
+        // Nothing to write. Still forwarded when bufSize is negative so the driver
+        // raises the GL_INVALID_VALUE the caller is owed.
+        if (bufSize < 0) GLES.glGetActiveUniform(program, uniformIndex, bufSize, nullptr, nullptr, nullptr, nullptr);
+        CHECK_GL_ERROR
+        return;
+    }
+
+    // Same buffer contract in both calls: at most bufSize-1 characters plus the
+    // terminator, and a length that excludes it. The size and type this also
+    // returns are what glGetActiveUniformsiv is for; they are discarded here.
+    GLint size = 0;
+    GLenum type = 0;
+    GLsizei written = 0;
+    uniformName[0] = '\0';
+    GLES.glGetActiveUniform(program, uniformIndex, bufSize, &written, &size, &type, uniformName);
+    if (length) *length = written;
+
+    LOG_D("  -> \"%s\"", uniformName)
+    CHECK_GL_ERROR
+}
+

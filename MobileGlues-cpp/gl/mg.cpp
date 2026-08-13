@@ -13,7 +13,8 @@
 #define DEBUG 0
 
 hardware_t hardware;
-thread_local gl_state_t gl_state;
+gl_state_s g_default_gl_state;
+thread_local gl_state_t gl_state = &g_default_gl_state;
 
 FUNC_GL_STATE_SIZEI(proxy_width)
 FUNC_GL_STATE_SIZEI(proxy_height)
