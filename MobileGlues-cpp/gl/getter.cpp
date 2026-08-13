@@ -382,7 +382,7 @@ const GLubyte* glGetString(GLenum name) {
     case GL_VENDOR: {
         if (vendorString.empty()) {
             if (global_settings.hide_mg_env_level == HideMGEnvLevel::Disabled) {
-                std::string vendor = "Uniaball";
+                std::string vendor = "Swung0x48, BZLZHH, Tungsten, Uniaball";
                 vendorString = vendor;
             } else {
                 const char choices[] = "AINM";
