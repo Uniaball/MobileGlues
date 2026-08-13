@@ -7,6 +7,7 @@
 
 #include "buffer.h"
 #include "../egl/context.h"
+#include "glsl/glsl_for_es.h"
 #include <mutex>
 #include <unordered_map>
 #include <array>
@@ -38,6 +39,30 @@ static GLint maxArrayId = 0;
 
 namespace {
 
+// One entry of the GL_ATOMIC_COUNTER_BUFFER indexed-binding table. `size < 0`
+// means "the whole buffer" (a glBindBufferBase); it is resolved against the
+// buffer's real data size when the emulated program draws.
+struct atomic_buffer {
+    GLuint id;
+    GLsizeiptr size;
+    GLintptr offset;
+};
+
+// How the application bound its own SSBO at an indexed binding, so that the
+// atomic-counter emulation can put it back exactly (range information included).
+struct ssbo_binding_info {
+    GLuint id;
+    GLintptr offset;
+    GLsizeiptr size;
+    bool is_base;
+};
+
+// Desktop GL 4.2 caps the atomic counter binding space at 36 slots; the SSBO
+// index space the emulation borrows goes at least that far, and the driver-side
+// table has to cover whatever indices the application uses as well.
+static constexpr size_t kMaxAtomicCounterBindings = 36;
+static constexpr size_t kMaxSSBOSlots = 96;
+
 struct buffer_group_state_t { // shared across a share group
     std::vector<GLuint> gen_buffers;
     std::vector<char> gen_buffer_exists;
@@ -51,6 +76,15 @@ struct buffer_ctx_state_t { // private to one context
     std::vector<GLuint> free_array_ids;
     std::vector<GLuint> element_array_buffer_per_vao;
     std::array<GLuint, 13> bound_buffers{};
+    // Atomic-counter emulation state. Indexed bindings are context state, so
+    // these live here too instead of at file scope: two contexts must not see
+    // each other's bindings, and the saved/overridden markers have to follow
+    // the context that owns the draws.
+    std::vector<atomic_buffer> atomic_buffer_info;   // GL_ATOMIC_COUNTER_BUFFER indexed bindings
+    std::vector<ssbo_binding_info> ssbo_info;        // app-visible SSBO indexed bindings
+    std::vector<GLuint> ssbo_id;                     // buffer ids of ssbo_info (fast path)
+    std::vector<ssbo_binding_info> atomic_ssbo_saved; // bindings displaced by an active override
+    bool atomic_ssbo_overridden = false;
 };
 
 std::mutex g_buf_mutex;
@@ -110,6 +144,11 @@ enum BindingIndex : int {
     BINDING_COUNT
 };
 #define g_bound_buffers_arr (g_bc->bound_buffers)
+#define g_buffer_map_atomic_buffer_info (g_bc->atomic_buffer_info)
+#define g_buffer_map_ssbo_info (g_bc->ssbo_info)
+#define g_buffer_map_ssbo_id (g_bc->ssbo_id)
+#define g_atomic_ssbo_saved (g_bc->atomic_ssbo_saved)
+#define g_atomic_ssbo_overridden (g_bc->atomic_ssbo_overridden)
 static_assert(BINDING_COUNT == 13, "buffer_ctx_state_t::bound_buffers must match BindingIndex");
 
 static inline void ensure_buffer_capacity(GLuint id) {
@@ -414,6 +453,21 @@ void glDeleteBuffers(GLsizei n, const GLuint* buffers) {
         if (buffers[i] != 0 && find_bound_buffer(GL_PARAMETER_BUFFER_BINDING) == buffers[i]) {
             set_bound_buffer_by_target(GL_PARAMETER_BUFFER, 0);
         }
+        // Dropped bindings can still sit in the tracked tables (atomic counter
+        // bindings, app SSBO bindings); purge them so a recycled id never picks
+        // up a stale range, and so the emulation does not rebind a dead buffer.
+        for (auto& e : g_buffer_map_atomic_buffer_info) {
+            if (e.id == buffers[i]) e.id = 0;
+        }
+        for (auto& e : g_atomic_ssbo_saved) {
+            if (e.id == buffers[i]) e.id = 0;
+        }
+        for (auto& e : g_buffer_map_ssbo_info) {
+            if (e.id == buffers[i]) e.id = 0;
+        }
+        for (auto& id : g_buffer_map_ssbo_id) {
+            if (id == buffers[i]) id = 0;
+        }
         if (find_real_buffer(buffers[i])) {
             GLuint real_buff = find_real_buffer(buffers[i]);
             GLES.glDeleteBuffers(1, &real_buff);
@@ -483,21 +537,8 @@ void glBindBuffer(GLenum target, GLuint buffer) {
     CHECK_GL_ERROR
 }
 
-struct atomic_buffer {
-    GLuint id;
-    GLsizeiptr size;
-    GLintptr offset;
-};
-
-static std::vector<atomic_buffer> g_buffer_map_atomic_buffer_info;
-static std::vector<GLuint> g_buffer_map_ssbo_id;
-
-// SSBO bindings displaced while emulating atomic counters as SSBOs, so the
-// draw that follows the emulated command can put the previous bindings back.
-static thread_local std::vector<GLuint> g_atomic_ssbo_saved;
-static thread_local bool g_atomic_ssbo_overridden = false;
-
 extern UnorderedMap<GLuint, bool> program_map_is_atomic_counter_emulated;
+extern UnorderedMap<GLuint, std::vector<AtomicBufferBinding>> program_map_atomic_bindings;
 
 GLuint find_bound_ssbo_at_index(GLuint index) {
     if (g_buffer_map_ssbo_id.empty() || index >= g_buffer_map_ssbo_id.size()) {
@@ -506,21 +547,41 @@ GLuint find_bound_ssbo_at_index(GLuint index) {
     return g_buffer_map_ssbo_id[index];
 }
 
+// Resolve a GL_ATOMIC_COUNTER_BUFFER indexed binding to the range the emulated
+// SSBO has to present at the same index. A size < 0 is the glBindBufferBase
+// marker: the range is the whole buffer, discovered here because the app may
+// have uploaded data after binding.
+static void resolve_atomic_range(const atomic_buffer& buf, GLintptr& offset, GLsizeiptr& size) {
+    offset = buf.offset >= 0 ? buf.offset : 0;
+    size = buf.size;
+    if (size < 0) size = static_cast<GLsizeiptr>(get_buffer_data_size(buf.id));
+    if (size <= 0) size = 0;
+}
+
 void bindAllAtomicCounterAsSSBO() {
     if (!global_settings.ext_shader_atomic_counters) return;
     // Only the bindings of buffers the current program actually references as
     // atomic counters get overridden; everything else must be left alone.
     if (!program_map_is_atomic_counter_emulated[gl_state->current_program]) return;
     const size_t count = g_buffer_map_atomic_buffer_info.size();
-    if (g_atomic_ssbo_saved.size() < count) g_atomic_ssbo_saved.resize(count, 0);
+    if (count == 0) return;
+    if (g_atomic_ssbo_saved.size() < count) g_atomic_ssbo_saved.resize(count, {0, 0, 0, true});
     bool any = false;
     for (size_t i = 0; i < count; ++i) {
         const atomic_buffer& buf = g_buffer_map_atomic_buffer_info[i];
-        if (buf.id == 0 || buf.size == 0) continue;
+        if (buf.id == 0) continue;
         GLuint realID = find_real_buffer(buf.id);
         if (!realID) continue;
-        g_atomic_ssbo_saved[i] = find_bound_ssbo_at_index((GLuint)i);
-        GLES.glBindBufferRange(GL_SHADER_STORAGE_BUFFER, (GLuint)i, realID, buf.offset, buf.size);
+        GLintptr offset = 0;
+        GLsizeiptr size = 0;
+        resolve_atomic_range(buf, offset, size);
+        if (size <= 0) continue;
+        g_atomic_ssbo_saved[i] = g_buffer_map_ssbo_info.size() > i ? g_buffer_map_ssbo_info[i]
+                                                                   : ssbo_binding_info{0, 0, 0, true};
+        // The emulated block addresses its counters relative to the range the
+        // application bound, so the range (offset AND size) must be preserved
+        // exactly; a Base binding here would widen what the shader can touch.
+        GLES.glBindBufferRange(GL_SHADER_STORAGE_BUFFER, (GLuint)i, realID, offset, size);
         any = true;
         LOG_D("Bound atomic counter buffer %u(real: %u) as SSBO at index %zu", buf.id, realID, i);
     }
@@ -529,22 +590,40 @@ void bindAllAtomicCounterAsSSBO() {
 
 void restoreAtomicCounterAsSSBO() {
     if (!g_atomic_ssbo_overridden) return;
-    const size_t count = g_buffer_map_atomic_buffer_info.size();
+    const size_t count = std::min(g_buffer_map_atomic_buffer_info.size(), g_atomic_ssbo_saved.size());
     for (size_t i = 0; i < count; ++i) {
-        const atomic_buffer& buf = g_buffer_map_atomic_buffer_info[i];
-        if (buf.id == 0) continue;
+        if (g_buffer_map_atomic_buffer_info[i].id == 0) continue;
+        const ssbo_binding_info& saved = g_atomic_ssbo_saved[i];
         // The app re-bound this index to one of its own buffers while the
         // override was in place; leave that untouched.
-        if (find_bound_ssbo_at_index((GLuint)i) != g_atomic_ssbo_saved[i]) continue;
-        if (g_atomic_ssbo_saved[i] != 0) {
-            GLuint real = find_real_buffer(g_atomic_ssbo_saved[i]);
-            if (real) GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)i, real);
+        if (find_bound_ssbo_at_index((GLuint)i) != saved.id) continue;
+        if (saved.id != 0) {
+            GLuint real = find_real_buffer(saved.id);
+            if (real) {
+                if (saved.is_base || saved.size <= 0) {
+                    GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)i, real);
+                } else {
+                    GLES.glBindBufferRange(GL_SHADER_STORAGE_BUFFER, (GLuint)i, real, saved.offset, saved.size);
+                }
+            }
         } else {
             GLES.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)i, 0);
         }
-        g_buffer_map_ssbo_id[i] = g_atomic_ssbo_saved[i];
+        // The app may never have bound any SSBO at all (only atomic buffers):
+        // the id table is then empty on purpose and must stay that way.
+        if (i < g_buffer_map_ssbo_id.size()) g_buffer_map_ssbo_id[i] = saved.id;
     }
     g_atomic_ssbo_overridden = false;
+}
+
+static inline void record_ssbo_binding(GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size, bool is_base) {
+    if (g_buffer_map_ssbo_info.empty()) {
+        g_buffer_map_ssbo_info.resize(kMaxSSBOSlots, {0, 0, 0, true});
+        g_buffer_map_ssbo_id.resize(kMaxSSBOSlots, 0);
+    }
+    if (index >= g_buffer_map_ssbo_info.size()) return;
+    g_buffer_map_ssbo_info[index] = {buffer, offset, size, is_base};
+    g_buffer_map_ssbo_id[index] = buffer;
 }
 
 void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
@@ -562,19 +641,18 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
             CHECK_GL_ERROR
         }
         if (g_buffer_map_atomic_buffer_info.empty()) {
-            g_buffer_map_atomic_buffer_info.resize(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, {});
+            g_buffer_map_atomic_buffer_info.resize(kMaxAtomicCounterBindings, {0, 0, 0});
         }
-        g_buffer_map_atomic_buffer_info[index] = {buffer, size, offset};
+        if (index < g_buffer_map_atomic_buffer_info.size()) {
+            g_buffer_map_atomic_buffer_info[index] = {buffer, size, offset};
+        }
         return;
     }
 
     if (!has_buffer(buffer) || buffer == 0) {
         GLES.glBindBufferRange(target, index, buffer, offset, size);
         if (target == GL_SHADER_STORAGE_BUFFER) {
-            if (g_buffer_map_ssbo_id.empty()) {
-                g_buffer_map_ssbo_id.resize(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0);
-            }
-            g_buffer_map_ssbo_id[index] = 0;
+            record_ssbo_binding(index, 0, 0, 0, true);
         }
         CHECK_GL_ERROR
         return;
@@ -587,10 +665,7 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
     }
     GLES.glBindBufferRange(target, index, real_buffer, offset, size);
     if (target == GL_SHADER_STORAGE_BUFFER) {
-        if (g_buffer_map_ssbo_id.empty()) {
-            g_buffer_map_ssbo_id.resize(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0);
-        }
-        g_buffer_map_ssbo_id[index] = buffer;
+        record_ssbo_binding(index, buffer, offset, size, false);
     }
     CHECK_GL_ERROR
 }
@@ -607,19 +682,20 @@ void glBindBufferBase(GLenum target, GLuint index, GLuint buffer) {
             CHECK_GL_ERROR
         }
         if (g_buffer_map_atomic_buffer_info.empty()) {
-            g_buffer_map_atomic_buffer_info.resize(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, {});
+            g_buffer_map_atomic_buffer_info.resize(kMaxAtomicCounterBindings, {0, 0, 0});
         }
-        g_buffer_map_atomic_buffer_info[index] = {buffer, static_cast<GLsizeiptr>(get_buffer_data_size(buffer)), 0};
+        // A Base binding covers the whole buffer; the size is resolved when the
+        // emulated draw runs, because the app may upload data afterwards.
+        if (index < g_buffer_map_atomic_buffer_info.size()) {
+            g_buffer_map_atomic_buffer_info[index] = {buffer, -1, 0};
+        }
         return;
     }
 
     if (!has_buffer(buffer) || buffer == 0) {
         GLES.glBindBufferBase(target, index, buffer);
         if (target == GL_SHADER_STORAGE_BUFFER) {
-            if (g_buffer_map_ssbo_id.empty()) {
-                g_buffer_map_ssbo_id.resize(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0);
-            }
-            g_buffer_map_ssbo_id[index] = 0;
+            record_ssbo_binding(index, 0, 0, 0, true);
         }
         CHECK_GL_ERROR
         return;
@@ -632,10 +708,7 @@ void glBindBufferBase(GLenum target, GLuint index, GLuint buffer) {
     }
     GLES.glBindBufferBase(target, index, real_buffer);
     if (target == GL_SHADER_STORAGE_BUFFER) {
-        if (g_buffer_map_ssbo_id.empty()) {
-            g_buffer_map_ssbo_id.resize(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0);
-        }
-        g_buffer_map_ssbo_id[index] = buffer;
+        record_ssbo_binding(index, buffer, 0, 0, true);
     }
     CHECK_GL_ERROR
 }
@@ -1029,31 +1102,94 @@ size_t glClearTypeBytes(GLenum type) {
     }
 }
 
+// Components the *data* (format/type) provides for one clear value.
+int glClearFormatComponents(GLenum format) {
+    switch (format) {
+    case GL_RGBA: case GL_RGBA_INTEGER: return 4;
+    case GL_RGB: case GL_RGB_INTEGER: return 3;
+    case GL_RG: case GL_RG_INTEGER: return 2;
+    case GL_RED: case GL_RED_INTEGER: case GL_DEPTH_COMPONENT: case GL_STENCIL_INDEX: return 1;
+    default: return 1;
+    }
+}
+
+// Components and bytes-per-component of a buffer element of this storage
+// format. Returns false for formats this emulation does not know; callers then
+// fall back to the data type width.
+bool glClearElementFormat(GLenum internalformat, int& components, int& bpc) {
+    switch (internalformat) {
+    case GL_R8: case GL_R8UI: case GL_R8I: case GL_R8_SNORM: components = 1; bpc = 1; return true;
+    case GL_R16F: case GL_R16UI: case GL_R16I: case GL_R16_SNORM: components = 1; bpc = 2; return true;
+    case GL_R32F: case GL_R32UI: case GL_R32I: components = 1; bpc = 4; return true;
+    case GL_RG8: case GL_RG8UI: case GL_RG8I: case GL_RG8_SNORM: components = 2; bpc = 1; return true;
+    case GL_RG16F: case GL_RG16UI: case GL_RG16I: case GL_RG16_SNORM: components = 2; bpc = 2; return true;
+    case GL_RG32F: case GL_RG32UI: case GL_RG32I: components = 2; bpc = 4; return true;
+    case GL_RGB32F: case GL_RGB32UI: case GL_RGB32I: components = 3; bpc = 4; return true;
+    case GL_RGBA8: case GL_RGBA8UI: case GL_RGBA8I: components = 4; bpc = 1; return true;
+    case GL_RGBA16F: case GL_RGBA16UI: case GL_RGBA16I: components = 4; bpc = 2; return true;
+    case GL_RGBA32F: case GL_RGBA32UI: case GL_RGBA32I: components = 4; bpc = 4; return true;
+    case GL_RGB10_A2: case GL_RGB10_A2UI: components = 4; bpc = 1; return true;
+    default: return false;
+    }
+}
+
 // GLES has no glClearBufferData/glClearBufferSubData, so hosts could never
 // clear a buffer this way -- the stub versions were no-ops. Fill the range
 // CPU-side through a map instead, which also honours the borrowed-target rule
 // so GL_ATOMIC_COUNTER_BUFFER data lands in the SSBO the emulated shader reads.
-void fill_buffer_cpu(GLenum target, GLintptr offset, GLsizeiptr size, GLenum type, const void* data) {
+//
+// The clear value is one pixel of `format`/`type`; it is expanded to a
+// full element of `internalformat` (missing components take the defaults
+// 0,0,0,1) and repeated over the range.
+void fill_buffer_cpu(GLenum target, GLintptr offset, GLsizeiptr size, GLenum internalformat, GLenum format,
+                     GLenum type, const void* data) {
     if (size <= 0) return;
-    const size_t width = glClearTypeBytes(type);
-    if (width == 0) {
+    // GL_ATOMIC_COUNTER_BUFFER exists only when the extension is on; without
+    // it there is nothing to route this through, so stay a silent no-op just
+    // like the stub these functions replaced.
+    if (target == GL_ATOMIC_COUNTER_BUFFER && !global_settings.ext_shader_atomic_counters) return;
+    const size_t value_width = glClearTypeBytes(type);
+    if (value_width == 0) {
         LOG_W("glClearBuffer*: unsupported type 0x%X", type);
         return;
     }
+    int components = 1;
+    int bpc = static_cast<int>(value_width);
+    glClearElementFormat(internalformat, components, bpc);
+    const size_t element_bytes = static_cast<size_t>(components) * static_cast<size_t>(bpc);
+    const int format_components = glClearFormatComponents(format);
+
+    std::vector<unsigned char> element(element_bytes, 0);
+    if (data) {
+        const unsigned char* src = static_cast<const unsigned char*>(data);
+        for (int c = 0; c < format_components && c < components; ++c) {
+            memcpy(element.data() + static_cast<size_t>(c) * bpc, src + static_cast<size_t>(c) * value_width,
+                   value_width < static_cast<size_t>(bpc) ? value_width : static_cast<size_t>(bpc));
+        }
+    }
+    // Missing components take the GL clear defaults: G=0, B=0, A=1.
+    if (components >= 4) {
+        unsigned char alpha[4] = {0, 0, 0, 0};
+        alpha[0] = 1;
+        memcpy(element.data() + 3 * static_cast<size_t>(bpc), alpha, static_cast<size_t>(bpc));
+    }
+
     borrowed_target_t t(target);
     void* ptr = GLES.glMapBufferRange(t.target, offset, size, GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
     if (!ptr) {
         CHECK_GL_ERROR
         return;
     }
-    unsigned char pattern[4] = {0, 0, 0, 0};
-    if (data) memcpy(pattern, data, width);
     char* dst = static_cast<char*>(ptr);
-    GLsizeiptr written = 0;
-    while (written < size) {
-        const size_t n = size - written < (GLsizeiptr)width ? size - written : width;
-        memcpy(dst + written, pattern, n);
-        written += width;
+    // Progressive doubling fill: copy the already-filled prefix forward, which
+    // turns the element-repeat into ~log(n) memmove calls instead of one per
+    // element.
+    size_t done = 0;
+    while (done < static_cast<size_t>(size)) {
+        const size_t chunk = std::min(done ? done : element_bytes, static_cast<size_t>(size) - done);
+        const char* src = done ? dst : reinterpret_cast<const char*>(element.data());
+        memmove(dst + done, src, chunk);
+        done += chunk;
     }
     GLES.glUnmapBuffer(t.target);
     CHECK_GL_ERROR
@@ -1065,14 +1201,14 @@ void glClearBufferData(GLenum target, GLenum internalformat, GLenum format, GLen
     LOG_D("glClearBufferData, target = %s, internalformat = 0x%X, format = 0x%X, type = 0x%X",
           glEnumToString(target), internalformat, format, type);
     const GLsizeiptr size = static_cast<GLsizeiptr>(get_buffer_data_size(find_bound_buffer_by_target(target)));
-    fill_buffer_cpu(target, 0, size, type, data);
+    fill_buffer_cpu(target, 0, size, internalformat, format, type, data);
 }
 
 void glClearBufferSubData(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format,
                           GLenum type, const void* data) {
     LOG()
     LOG_D("glClearBufferSubData, target = %s, offset = %p, size = %zi", glEnumToString(target), (void*)offset, size);
-    fill_buffer_cpu(target, offset, size, type, data);
+    fill_buffer_cpu(target, offset, size, internalformat, format, type, data);
 }
 
 // GLES exposes no glGetBufferSubData at all, so the stub used to drop the read.
@@ -1082,6 +1218,7 @@ void glGetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void* d
     LOG()
     LOG_D("glGetBufferSubData, target = %s, offset = %p, size = %zi", glEnumToString(target), (void*)offset, size);
     if (!data || size <= 0) return;
+    if (target == GL_ATOMIC_COUNTER_BUFFER && !global_settings.ext_shader_atomic_counters) return;
     borrowed_target_t t(target);
     const void* ptr = GLES.glMapBufferRange(t.target, offset, size, GL_MAP_READ_BIT);
     if (!ptr) {
@@ -1091,6 +1228,52 @@ void glGetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void* d
     memcpy(data, ptr, size);
     GLES.glUnmapBuffer(t.target);
     CHECK_GL_ERROR
+}
+
+// The extension advertises GL_ARB_shader_atomic_counters, so applications can
+// query per-program atomic counter buffer info. The emulation rewrote every
+// counter into an SSBO block, but the binding numbers (and the counter offsets
+// within each buffer) are exactly what the original program declared.
+void glGetActiveAtomicCounterBufferiv(GLuint program, GLuint bufferIndex, GLenum pname, GLint* params) {
+    LOG()
+    LOG_D("glGetActiveAtomicCounterBufferiv, program = %d, bufferIndex = %d, pname = 0x%X", program, bufferIndex,
+          pname);
+    auto it = program_map_atomic_bindings.find(program);
+    if (it == program_map_atomic_bindings.end() || bufferIndex >= it->second.size() || !params) return;
+    const AtomicBufferBinding& info = it->second[bufferIndex];
+    switch (pname) {
+    case GL_ATOMIC_COUNTER_BUFFER_BINDING:
+        *params = info.binding;
+        break;
+    case GL_ATOMIC_COUNTER_BUFFER_DATA_SIZE: {
+        // The size of the range the application currently has bound at that
+        // binding slot; 0 when nothing is bound.
+        const size_t idx = static_cast<size_t>(info.binding);
+        if (idx < g_buffer_map_atomic_buffer_info.size() && g_buffer_map_atomic_buffer_info[idx].id != 0) {
+            GLintptr offset = 0;
+            GLsizeiptr size = 0;
+            resolve_atomic_range(g_buffer_map_atomic_buffer_info[idx], offset, size);
+            *params = static_cast<GLint>(size);
+        } else {
+            *params = 0;
+        }
+        break;
+    }
+    case GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTERS:
+        *params = static_cast<GLint>(info.counter_offsets.size());
+        break;
+    case GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES:
+        // One index per active counter; the counters in a buffer sit at their
+        // byte offset, so report offset / 4, which is what the query means
+        // here.
+        for (size_t i = 0; i < info.counter_offsets.size(); ++i) {
+            params[i] = info.counter_offsets[i] / 4;
+        }
+        break;
+    default:
+        LOG_D("glGetActiveAtomicCounterBufferiv: unhandled pname 0x%X", pname);
+        break;
+    }
 }
 
 void glGenVertexArrays(GLsizei n, GLuint* arrays) {

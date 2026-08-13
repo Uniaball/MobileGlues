@@ -24,6 +24,8 @@ UnorderedMap<GLuint, bool> shader_map_is_sampler_buffer_emulated;
 
 UnorderedMap<GLuint, bool> shader_map_is_atomic_counter_emulated;
 
+UnorderedMap<GLuint, std::vector<AtomicBufferBinding>> shader_map_atomic_bindings;
+
 bool can_run_essl3(unsigned int esversion, const char* glsl) {
     if (strncmp(glsl, "#version 100", 12) == 0) {
         return true;
@@ -115,10 +117,19 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         LOG_D("\n[INFO] [Shader] Converted Shader source: \n%s", essl_src.c_str())
     }
 
+    if (global_settings.ext_shader_atomic_counters) {
+        // Track which atomic counter buffers the shader uses so the program
+        // can answer glGetActiveAtomicCounterBufferiv. Parsed from the source
+        // the application supplied: it is what declares the counters, and it
+        // stays valid across the GLSL cache.
+        auto bindings = extract_atomic_buffer_bindings(glsl_src);
+        if (!bindings.empty()) shader_map_atomic_bindings[shader] = std::move(bindings);
+    }
+
     if (!essl_src.empty()) {
         g_shaderInfos[shader].converted = essl_src;
         const char* s[] = {essl_src.c_str()};
-        GLES.glShaderSource(shader, count, s, nullptr);
+        GLES.glShaderSource(shader, 1, s, nullptr);
         if (hardware->emulate_texture_buffer) shader_map_is_sampler_buffer_emulated[shader] = is_sampler_buffer_emulated;
     } else {
         LOG_E("Shader source empty for shader %d, unable to submit.", shader)

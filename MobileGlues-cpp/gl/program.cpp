@@ -14,9 +14,11 @@
 #include <regex>
 #include <cstring>
 #include <iostream>
+#include <cstdint>
 #include "../config/settings.h"
 #include <ankerl/unordered_dense.h>
 #include "drawing.h"
+#include "glsl/glsl_for_es.h"
 
 #define DEBUG 0
 
@@ -25,6 +27,9 @@ UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
 
 extern UnorderedMap<GLuint, bool> shader_map_is_atomic_counter_emulated;
 UnorderedMap<GLuint, bool> program_map_is_atomic_counter_emulated;
+
+extern UnorderedMap<GLuint, std::vector<AtomicBufferBinding>> shader_map_atomic_bindings;
+UnorderedMap<GLuint, std::vector<AtomicBufferBinding>> program_map_atomic_bindings;
 
 bool g_current_program_needs_sampler_emulation = false;
 
@@ -215,6 +220,35 @@ void glAttachShader(GLuint program, GLuint shader) {
         program_map_is_atomic_counter_emulated[program] = true;
         LOG_D("Shader %d is atomic counter emulated, setting program %d to atomic counter emulated", shader, program)
     }
+    // Merge the shader's atomic counter bindings into the program's, keeping
+    // the list sorted by binding number so glGetActiveAtomicCounterBufferiv's
+    // bufferIndex order is deterministic.
+    const auto bit = shader_map_atomic_bindings.find(shader);
+    if (bit != shader_map_atomic_bindings.end() && !bit->second.empty()) {
+        auto& merged = program_map_atomic_bindings[program];
+        for (const AtomicBufferBinding& add : bit->second) {
+            size_t found = SIZE_MAX;
+            for (size_t k = 0; k < merged.size(); ++k) {
+                if (merged[k].binding == add.binding) {
+                    found = k;
+                    break;
+                }
+            }
+            if (found == SIZE_MAX) {
+                merged.push_back(add);
+            } else {
+                // A second stage can contribute counters to the same buffer.
+                for (int off : add.counter_offsets) {
+                    if (std::find(merged[found].counter_offsets.begin(), merged[found].counter_offsets.end(), off) ==
+                        merged[found].counter_offsets.end()) {
+                        merged[found].counter_offsets.push_back(off);
+                    }
+                }
+            }
+        }
+        std::sort(merged.begin(), merged.end(),
+                  [](const AtomicBufferBinding& a, const AtomicBufferBinding& b) { return a.binding < b.binding; });
+    }
 
     GLint type = 0;
     GLES.glGetShaderiv(shader, GL_SHADER_TYPE, &type);
@@ -247,6 +281,7 @@ GLuint glCreateProgram() {
             }
         }
         program_map_is_atomic_counter_emulated[program] = false;
+        program_map_atomic_bindings[program].clear();
         program_map_should_generate_fs[program] = ShouldGenerateFSState::Unknown;
     }
     CHECK_GL_ERROR

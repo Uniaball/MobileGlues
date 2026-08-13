@@ -456,71 +456,105 @@ static size_t find_insertion_point(const std::string& glsl) {
 
     return insertion_point;
 }
-bool process_non_opaque_atomic_to_ssbo(std::string& source) {
-    if (source.find("atomicCounter") == std::string::npos) return false;
+namespace {
+struct AtomicCounterDecl {
+    std::string var;
+    int binding = -1;
+    int offset = -1;
+    size_t pos = 0; // byte offset of the whole declaration in the source
+    size_t len = 0;
+    size_t seq = 0; // order within the declaration, tiebreaker for equal positions
+};
 
-    struct CounterDecl {
-        std::string var;
-        int binding = -1;
-        int offset = -1;
-        size_t pos = 0;
-        size_t len = 0;
-    };
-    std::vector<CounterDecl> decls;
-
+// Scan the desktop GLSL source for `layout(...) uniform atomic_uint ...;`
+// declarations. Multi-variable declarations (`uniform atomic_uint a, b;`) yield
+// one entry per name. CounterDecls without a binding qualifier are dropped:
+// there is no buffer to attach them to.
+std::vector<AtomicCounterDecl> scan_atomic_decls(const std::string& source) {
+    std::vector<AtomicCounterDecl> decls;
     static const std::regex decl_rx(
         R"(layout\s*\(\s*([^)]*?)\s*\)\s*uniform\s+atomic_uint\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;)",
         std::regex::icase);
     static const std::regex bind_rx(R"(binding\s*=\s*(\d+))", std::regex::icase);
     static const std::regex off_rx(R"(offset\s*=\s*(\d+))", std::regex::icase);
 
-    {
-        std::smatch m;
-        auto it = source.cbegin();
-        while (std::regex_search(it, source.cend(), m, decl_rx)) {
-            size_t pos = std::distance(source.cbegin(), it) + m.position(0);
-            size_t len = m.length(0);
-            std::smatch b, o;
-            const std::string quals = m[1].str();
-            int binding = -1;
-            int offset = -1;
-            if (std::regex_search(quals, b, bind_rx)) binding = std::stoi(b[1].str());
-            if (std::regex_search(quals, o, off_rx)) offset = std::stoi(o[1].str());
+    std::smatch m;
+    auto it = source.cbegin();
+    size_t seq = 0;
+    while (std::regex_search(it, source.cend(), m, decl_rx)) {
+        size_t pos = std::distance(source.cbegin(), it) + m.position(0);
+        size_t len = m.length(0);
+        std::smatch b, o;
+        const std::string quals = m[1].str();
+        int binding = -1;
+        int offset = -1;
+        if (std::regex_search(quals, b, bind_rx)) binding = std::stoi(b[1].str());
+        if (std::regex_search(quals, o, off_rx)) offset = std::stoi(o[1].str());
 
-            // One declaration may list several counters: `uniform atomic_uint a, b;`
-            // They share the layout qualifiers; only the first takes the explicit
-            // offset, the rest fall into declaration order.
-            const std::string names_str = m[2].str();
-            std::vector<std::string> names;
-            size_t comma;
-            size_t start = 0;
-            while ((comma = names_str.find(',', start)) != std::string::npos) {
-                names.push_back(names_str.substr(start, comma - start));
-                start = comma + 1;
-            }
-            names.push_back(names_str.substr(start));
-            for (size_t idx = 0; idx < names.size(); ++idx) {
-                std::string name = names[idx];
-                const size_t bpos = name.find_first_not_of(" \t");
-                const size_t epos = name.find_last_not_of(" \t");
-                name = (bpos == std::string::npos) ? "" : name.substr(bpos, epos - bpos + 1);
-                if (name.empty()) continue;
-                // Without a binding qualifier there is no buffer to attach the
-                // counter to; leave such declarations untouched (they will fail to
-                // compile with the still-unescaped atomic operations, which is the
-                // source shader's bug).
-                if (binding < 0) continue;
-                CounterDecl decl;
-                decl.var = name;
-                decl.pos = pos;
-                decl.len = len;
-                decl.binding = binding;
-                decl.offset = (idx == 0 && offset >= 0) ? offset : -1;
-                decls.push_back(decl);
-            }
-            it = source.cbegin() + pos + len;
+        // One declaration may list several counters: `uniform atomic_uint a, b;`
+        // They share the layout qualifiers; only the first takes the explicit
+        // offset, the rest fall into declaration order.
+        const std::string names_str = m[2].str();
+        std::vector<std::string> names;
+        size_t comma;
+        size_t start = 0;
+        while ((comma = names_str.find(',', start)) != std::string::npos) {
+            names.push_back(names_str.substr(start, comma - start));
+            start = comma + 1;
+        }
+        names.push_back(names_str.substr(start));
+        for (size_t idx = 0; idx < names.size(); ++idx) {
+            std::string name = names[idx];
+            const size_t bpos = name.find_first_not_of(" \t");
+            const size_t epos = name.find_last_not_of(" \t");
+            name = (bpos == std::string::npos) ? "" : name.substr(bpos, epos - bpos + 1);
+            if (name.empty()) continue;
+            // Without a binding qualifier there is no buffer to attach the
+            // counter to; such declarations are left untouched.
+            if (binding < 0) continue;
+            AtomicCounterDecl decl;
+            decl.var = name;
+            decl.pos = pos;
+            decl.len = len;
+            decl.binding = binding;
+            decl.offset = (idx == 0 && offset >= 0) ? offset : -1;
+            decl.seq = seq++;
+            decls.push_back(std::move(decl));
+        }
+        it = source.cbegin() + pos + len;
+    }
+    return decls;
+}
+
+// Declaration order for counters that share a source position (multi-variable
+// declarations) is the order their names were written, so tie on `seq` instead
+// of leaving it to std::sort's unstable order.
+bool decl_before(const AtomicCounterDecl& a, const AtomicCounterDecl& b) {
+    if (a.pos != b.pos) return a.pos < b.pos;
+    return a.seq < b.seq;
+}
+
+// Fill in the implicit (absent) offsets in declaration order, 4 bytes per
+// counter, so explicit offsets keep working for the rest.
+void assign_implicit_offsets(std::vector<AtomicCounterDecl>& decls) {
+    std::map<int, std::vector<size_t>> by_binding;
+    for (size_t i = 0; i < decls.size(); ++i) by_binding[decls[i].binding].push_back(i);
+    for (auto& entry : by_binding) {
+        std::vector<size_t>& members = entry.second;
+        std::sort(members.begin(), members.end(), [&](size_t a, size_t b) { return decl_before(decls[a], decls[b]); });
+        int cursor = 0;
+        for (size_t i : members) {
+            if (decls[i].offset == -1) decls[i].offset = cursor;
+            cursor = decls[i].offset + 4;
         }
     }
+}
+} // namespace
+
+bool process_non_opaque_atomic_to_ssbo(std::string& source) {
+    if (source.find("atomicCounter") == std::string::npos) return false;
+
+    std::vector<AtomicCounterDecl> decls = scan_atomic_decls(source);
 
     // No `atomic_uint` block made it into a usable declaration. `source` may
     // only mention the word inside a comment or an unrelated (plain-uint) name,
@@ -529,26 +563,22 @@ bool process_non_opaque_atomic_to_ssbo(std::string& source) {
 
     // Counters sharing one binding live in the same buffer. Give implicit offsets
     // in declaration order (4 bytes per counter) so explicit offsets keep working.
-    std::map<int, std::vector<size_t>> by_binding;
-    for (size_t i = 0; i < decls.size(); ++i) by_binding[decls[i].binding].push_back(i);
-    for (auto&& [binding, members] : by_binding) {
-        std::sort(members.begin(), members.end(), [&](size_t a, size_t b) { return decls[a].pos < decls[b].pos; });
-        int cursor = 0;
-        for (size_t i : members) {
-            if (decls[i].offset == -1) decls[i].offset = cursor;
-            cursor = decls[i].offset + 4;
-        }
-    }
+    assign_implicit_offsets(decls);
 
     std::set<std::string> atomic_vars;
     std::set<int> emitted;
     std::map<int, size_t> binding_block_pos;
     bool helper_emitted = false;
     std::vector<std::pair<size_t, std::pair<size_t, std::string>>> replacements;
+    std::map<int, std::vector<size_t>> by_binding;
+    for (size_t i = 0; i < decls.size(); ++i) by_binding[decls[i].binding].push_back(i);
 
     // atomicCounterDecrement saturates at zero and reports the post-clamp
     // value. `atomicAdd(mem, uint(-1))` would wrap below zero and cannot
     // produce the new value, so use a compare-and-swap loop that serves both.
+    // atomicCounterAdd promises the post-add value; routing it through a helper
+    // also keeps the app's data expression evaluated exactly once (a bare
+    // `atomicAdd(x, d) + d` would run side effects twice).
     static const char* atomicCounterHelper = R"(
 uint mgAtomicCounterDecrement(inout uint value) {
     uint current = value;
@@ -561,6 +591,11 @@ uint mgAtomicCounterDecrement(inout uint value) {
         }
         current = previous;
     }
+}
+uint mgAtomicCounterAdd(inout uint value, uint data) {
+    uint previous = atomicAdd(value, data);
+    memoryBarrierBuffer();
+    return previous + data;
 }
 )";
 
@@ -584,8 +619,10 @@ uint mgAtomicCounterDecrement(inout uint value) {
         // padding inserted where gaps appear, so std430 mirrors the layout the
         // original atomic buffer had.
         std::vector<size_t> members = by_binding[decls[i].binding];
-        std::sort(members.begin(), members.end(),
-                  [&](size_t a, size_t b) { return decls[a].offset < decls[b].offset; });
+        std::sort(members.begin(), members.end(), [&](size_t a, size_t b) {
+            if (decls[a].offset != decls[b].offset) return decls[a].offset < decls[b].offset;
+            return decl_before(decls[a], decls[b]);
+        });
 
         std::string block = "layout(std430, binding=" + std::to_string(decls[i].binding) +
                             ") buffer AtomicCounterSSBO_" + std::to_string(decls[i].binding) + " {\n";
@@ -631,10 +668,11 @@ uint mgAtomicCounterDecrement(inout uint value) {
         const std::regex decRx(R"(\batomicCounterDecrement\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
         source = std::regex_replace(source, decRx, "mgAtomicCounterDecrement(" + var + ")");
 
-        // atomicCounterAdd returns the incremented (new) value.
+        // atomicCounterAdd returns the incremented (new) value, and its data
+        // expression must not run twice.
         const std::regex addRx(R"(\batomicCounterAdd\s*\(\s*)" + var + R"(\s*,\s*([^)]+)\s*\))",
                                std::regex::icase);
-        source = std::regex_replace(source, addRx, "(atomicAdd(" + var + ", ($1)) + ($1))");
+        source = std::regex_replace(source, addRx, "mgAtomicCounterAdd(" + var + ", ($1))");
 
         const std::regex cntRx(R"(\batomicCounter\s*\(\s*)" + var + R"(\s*\))", std::regex::icase);
         source = std::regex_replace(source, cntRx, var);
@@ -666,6 +704,26 @@ uint mgAtomicCounterDecrement(inout uint value) {
 
     source += "\n" + std::string(atomicCounterEmulatedWatermark);
     return true;
+}
+
+std::vector<AtomicBufferBinding> extract_atomic_buffer_bindings(const std::string& source) {
+    std::vector<AtomicBufferBinding> out;
+    std::vector<AtomicCounterDecl> decls = scan_atomic_decls(source);
+    if (decls.empty()) return out;
+    assign_implicit_offsets(decls);
+
+    std::map<int, std::vector<size_t>> by_binding;
+    for (size_t i = 0; i < decls.size(); ++i) by_binding[decls[i].binding].push_back(i);
+    for (auto& entry : by_binding) {
+        const int binding = entry.first;
+        std::vector<size_t>& members = entry.second;
+        std::sort(members.begin(), members.end(), [&](size_t a, size_t b) { return decl_before(decls[a], decls[b]); });
+        AtomicBufferBinding info;
+        info.binding = binding;
+        for (size_t i : members) info.counter_offsets.push_back(decls[i].offset);
+        out.push_back(std::move(info));
+    }
+    return out;
 }
 
 void process_sampler_buffer(std::string& source) { // a simplized version, should be rewritten in the future

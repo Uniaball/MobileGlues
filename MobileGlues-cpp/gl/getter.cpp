@@ -74,6 +74,39 @@ void glGetIntegerv(GLenum pname, GLint* params) {
         (*params) = g_current_ctx ? g_current_ctx->context_flags : 0;
         break;
     }
+    case GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS:
+        // The emulation table covers the desktop GL 4.2 maximum of 36 slots.
+        (*params) = 36;
+        break;
+    case GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE: {
+        // The "buffer" is an ordinary GLES buffer, so its size is only limited
+        // by the driver's SSBO block size. Answer with that instead of the GLES
+        // GL_INVALID_ENUM a passthrough would produce.
+        GLint es_params = 1 << 20;
+        GLES.glGetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &es_params);
+        (*params) = es_params;
+        break;
+    }
+    case GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS:
+    case GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS:
+    case GL_MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS:
+    case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS:
+    case GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS:
+    case GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS:
+    case GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS:
+        (*params) = 36;
+        break;
+    case GL_MAX_COMBINED_ATOMIC_COUNTERS:
+    case GL_MAX_VERTEX_ATOMIC_COUNTERS:
+    case GL_MAX_TESS_CONTROL_ATOMIC_COUNTERS:
+    case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTERS:
+    case GL_MAX_GEOMETRY_ATOMIC_COUNTERS:
+    case GL_MAX_FRAGMENT_ATOMIC_COUNTERS:
+    case GL_MAX_COMPUTE_ATOMIC_COUNTERS:
+        // No per-stage limit in the SSBO emulation; counters only live in
+        // buffers sized by the application.
+        (*params) = 4096;
+        break;
     case GL_ARRAY_BUFFER_BINDING:
     case GL_ATOMIC_COUNTER_BUFFER_BINDING:
     case GL_COPY_READ_BUFFER_BINDING:

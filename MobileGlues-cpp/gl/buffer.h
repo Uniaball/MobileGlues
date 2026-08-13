@@ -104,6 +104,9 @@ extern "C"
 
     GLAPI GLAPIENTRY void glGetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void* data);
 
+    GLAPI GLAPIENTRY void glGetActiveAtomicCounterBufferiv(GLuint program, GLuint bufferIndex, GLenum pname,
+                                                          GLint* params);
+
     GLAPI GLAPIENTRY void glGenVertexArrays(GLsizei n, GLuint* arrays);
 
     GLAPI GLAPIENTRY void glDeleteVertexArrays(GLsizei n, const GLuint* arrays);
