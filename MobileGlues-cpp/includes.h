@@ -8,7 +8,7 @@
 #ifndef MOBILEGLUES_INCLUDES_H
 #define MOBILEGLUES_INCLUDES_H
 
-#define RENDERERNAME "MobileGlues"
+#define RENDERERNAME "DesktopGlues"
 #ifdef __ANDROID__
 #include <android/log.h>
 #endif
