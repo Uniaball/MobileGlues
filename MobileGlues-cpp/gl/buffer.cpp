@@ -1260,6 +1260,20 @@ extern "C"
         __attribute__((alias("glBufferStorage")));
     GLAPI GLAPIENTRY void glBindBufferARB(GLenum target, GLuint buffer) __attribute__((alias("glBindBuffer")));
 }
+#else
+// Darwin has no __attribute__((alias)): keep the ARB spellings as plain forwards.
+extern "C"
+{
+    GLAPI GLAPIENTRY void* glMapBufferARB(GLenum target, GLenum access) { return glMapBuffer(target, access); }
+    GLAPI GLAPIENTRY void glBufferDataARB(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
+        glBufferData(target, size, data, usage);
+    }
+    GLAPI GLAPIENTRY GLboolean glUnmapBufferARB(GLenum target) { return glUnmapBuffer(target); }
+    GLAPI GLAPIENTRY void glBufferStorageARB(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags) {
+        glBufferStorage(target, size, data, flags);
+    }
+    GLAPI GLAPIENTRY void glBindBufferARB(GLenum target, GLuint buffer) { glBindBuffer(target, buffer); }
+}
 #endif
 
 void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) {
