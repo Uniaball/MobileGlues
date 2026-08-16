@@ -12,6 +12,9 @@
 #include <EGL/egl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
 
 // Tracing for the EGL layer.
 //
@@ -33,10 +36,19 @@
 #define MG_EGL_TRACE 0
 
 // A thread id, via the syscall rather than gettid(), which bionic only exposes as
-// a real symbol from API 30 and this library targets 21.
+// a real symbol from API 30 and this library targets 21. Darwin has no
+// __NR_gettid; pthread_threadid_np is the system thread id there.
+#ifdef __APPLE__
+static inline int mg_egl_tid(void) {
+    unsigned long long tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    return (int)tid;
+}
+#else
 static inline int mg_egl_tid(void) {
     return (int)syscall(__NR_gettid);
 }
+#endif
 
 #if MG_EGL_TRACE
 #define EGL_TRACE(...) LOG_I(__VA_ARGS__)
