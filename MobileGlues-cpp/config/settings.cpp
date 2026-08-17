@@ -33,6 +33,7 @@ void init_settings() {
     global_settings.custom_gl_version = {0, 0, 0}; // will go default
     global_settings.fsr1_setting = FSR1_Quality_Preset::Disabled;
     global_settings.hide_mg_env_level = HideMGEnvLevel::Disabled;
+    global_settings.debug_scope = DebugScope::Disabled;
 
 #else
 
@@ -60,6 +61,8 @@ void init_settings() {
         success ? static_cast<FSR1_Quality_Preset>(config_get_int("fsr1Setting")) : FSR1_Quality_Preset::Disabled;
     HideMGEnvLevel hideMGEnvLevel =
         success ? static_cast<HideMGEnvLevel>(config_get_int("hideMGEnvLevel")) : HideMGEnvLevel::Disabled;
+    DebugScope debugScope =
+        success ? static_cast<DebugScope>(config_get_int("debugScope")) : DebugScope::Disabled;
 
     if (customGLVersionInt < 0) {
         customGLVersionInt = 0;
@@ -112,6 +115,9 @@ void init_settings() {
         static_cast<int>(hideMGEnvLevel) >= static_cast<int>(HideMGEnvLevel::MaxValue)) {
         hideMGEnvLevel = HideMGEnvLevel::Disabled;
     }
+    if (static_cast<int>(debugScope) < 0 || static_cast<int>(debugScope) >= static_cast<int>(DebugScope::MaxValue)) {
+        debugScope = DebugScope::Disabled;
+    }
 
     Version customGLVersion(customGLVersionInt);
 
@@ -138,6 +144,7 @@ void init_settings() {
         angleDepthClearFixMode = AngleDepthClearFixMode::Disabled;
         fsr1Setting = FSR1_Quality_Preset::Disabled;
         hideMGEnvLevel = HideMGEnvLevel::Disabled;
+        debugScope = DebugScope::Disabled;
     }
 
     AngleMode finalAngleMode = AngleMode::Disabled;
@@ -221,6 +228,7 @@ void init_settings() {
     global_settings.custom_gl_version = customGLVersion;
     global_settings.fsr1_setting = fsr1Setting;
     global_settings.hide_mg_env_level = hideMGEnvLevel;
+    global_settings.debug_scope = debugScope;
 #endif
 
     LOG_V("[MobileGlues] Setting: enableAngle                 = %s",
@@ -248,6 +256,7 @@ void init_settings() {
     LOG_V("[MobileGlues] Setting: fsr1Setting                 = %i", static_cast<int>(global_settings.fsr1_setting))
     LOG_V("[MobileGlues] Setting: hideMGEnvLevel              = %i",
           static_cast<int>(global_settings.hide_mg_env_level))
+    LOG_V("[MobileGlues] Setting: debugScope                  = %i", static_cast<int>(global_settings.debug_scope))
 
     GLVersion =
         global_settings.custom_gl_version.isEmpty() ? Version(DEFAULT_GL_VERSION) : global_settings.custom_gl_version;

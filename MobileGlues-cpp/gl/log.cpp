@@ -8,8 +8,10 @@
 #include "log.h"
 #include <unistd.h>
 #include <mutex>
+#include <cstring>
 
 #include <GL/gl.h>
+#include "../config/settings.h"
 
 #ifndef __ANDROID__
 // Define a stub for __android_log_print if not on Android
@@ -1143,4 +1145,40 @@ void log_unique_function(const char* func_name) {
 }
 #endif
 
+// Runtime debug-scope gate for the LOG_* macros (see DebugScope in
+// config/settings.h). Decided per source file: the configured scope nests, so a
+// file in scope N is also in scope N+1. Paths are matched as substrings with
+// their directory so egl/loader.cpp and gles/loader.cpp stay distinguishable;
+// __FILE__ arrives as either a build-relative or absolute path, both match.
+static bool debug_covers_shader(const char* f) {
+    return strstr(f, "gl/shader.cpp") || strstr(f, "gl/program.cpp") || strstr(f, "gl/framebuffer.cpp") ||
+           strstr(f, "gl/glsl/");
+}
+
+static bool debug_covers_render(const char* f) {
+    return strstr(f, "gl/texture.cpp") || strstr(f, "gl/buffer.cpp") || strstr(f, "gl/drawing.cpp") ||
+           strstr(f, "gl/pixel.cpp") || strstr(f, "gl/getter.cpp") || strstr(f, "gl/enable.cpp") ||
+           strstr(f, "gl/gl.cpp");
+}
+
+static bool debug_covers_frame(const char* f) {
+    return strstr(f, "egl/") || strstr(f, "gles/") || strstr(f, "gl/multidraw.cpp") || strstr(f, "bench/");
+}
+
+extern "C" int mg_debug_enabled(const char* file) {
+    if (!file) return 0;
+    switch (global_settings.debug_scope) {
+    case DebugScope::Disabled:
+        return 0;
+    case DebugScope::Shader:
+        return debug_covers_shader(file);
+    case DebugScope::Render:
+        return debug_covers_shader(file) || debug_covers_render(file);
+    case DebugScope::Frame:
+        return debug_covers_shader(file) || debug_covers_render(file) || debug_covers_frame(file);
+    case DebugScope::All:
+    default:
+        return 1;
+    }
+}
 #endif

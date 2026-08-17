@@ -66,13 +66,63 @@ int __android_log_print(int prio, const char* tag, const char* fmt, ...);
     }
 
 #if !(DEBUG || GLOBAL_DEBUG)
-// Release builds: all debug logs become no-ops
-#define LOG() do {} while(0);
-#define LOG_D(...) do {} while(0);
-#define LOG_D_N(...) do {} while(0);
-#define LOG_W(...) do {} while(0);
-#define LOG_V(...) do {} while(0);
-#define LOG_I(...) do {} while(0);
+// Release builds: debug logs are gated at runtime by the configured debug scope
+// (config.json "debugScope", see DebugScope in config/settings.h). Each macro
+// consults mg_debug_enabled(__FILE__), so only the source files the chosen
+// scope covers emit anything. LOG_E / LOG_F / LOG_W_FORCE always emit.
+extern "C" int mg_debug_enabled(const char* file);
+#define LOG()                                                                                                          \
+    do {                                                                                                               \
+        if (mg_debug_enabled(__FILE__)) {                                                                               \
+            __android_log_print(ANDROID_LOG_DEBUG, RENDERERNAME, "\nUse function: %s", __FUNCTION__);                  \
+            printf("\nUse function: %s\n", __FUNCTION__);                                                              \
+            write_log("\nUse function: %s\n", __FUNCTION__);                                                           \
+        }                                                                                                              \
+    } while (0);
+#define LOG_D(...)                                                                                                     \
+    do {                                                                                                               \
+        if (mg_debug_enabled(__FILE__)) {                                                                               \
+            __android_log_print(ANDROID_LOG_DEBUG, RENDERERNAME, __VA_ARGS__);                                         \
+            printf(__VA_ARGS__);                                                                                       \
+            printf("\n");                                                                                              \
+            write_log(__VA_ARGS__);                                                                                    \
+        }                                                                                                              \
+    } while (0);
+#define LOG_D_N(...)                                                                                                   \
+    do {                                                                                                               \
+        if (mg_debug_enabled(__FILE__)) {                                                                               \
+            __android_log_print(ANDROID_LOG_DEBUG, RENDERERNAME, __VA_ARGS__);                                         \
+            printf(__VA_ARGS__);                                                                                       \
+            write_log_n(__VA_ARGS__);                                                                                  \
+        }                                                                                                              \
+    } while (0);
+#define LOG_W(...)                                                                                                     \
+    do {                                                                                                               \
+        if (mg_debug_enabled(__FILE__)) {                                                                               \
+            __android_log_print(ANDROID_LOG_WARN, RENDERERNAME, __VA_ARGS__);                                          \
+            printf(__VA_ARGS__);                                                                                       \
+            printf("\n");                                                                                              \
+            write_log(__VA_ARGS__);                                                                                    \
+        }                                                                                                              \
+    } while (0);
+#define LOG_V(...)                                                                                                     \
+    do {                                                                                                               \
+        if (mg_debug_enabled(__FILE__)) {                                                                               \
+            __android_log_print(ANDROID_LOG_VERBOSE, RENDERERNAME, __VA_ARGS__);                                       \
+            printf(__VA_ARGS__);                                                                                       \
+            printf("\n");                                                                                              \
+            write_log(__VA_ARGS__);                                                                                    \
+        }                                                                                                              \
+    } while (0);
+#define LOG_I(...)                                                                                                     \
+    do {                                                                                                               \
+        if (mg_debug_enabled(__FILE__)) {                                                                               \
+            __android_log_print(ANDROID_LOG_INFO, RENDERERNAME, __VA_ARGS__);                                          \
+            printf(__VA_ARGS__);                                                                                       \
+            printf("\n");                                                                                              \
+            write_log(__VA_ARGS__);                                                                                    \
+        }                                                                                                              \
+    } while (0);
 #define log_unique_function(...) do {} while(0);
 #else
 #if GLOBAL_DEBUG_FORCE_OFF

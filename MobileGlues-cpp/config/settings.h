@@ -97,6 +97,19 @@ enum class HideMGEnvLevel : int {
     MaxValue
 };
 
+// Which source files the debug logs (LOG_D / LOG_V / LOG_I / LOG_W / LOG())
+// are compiled to emit at runtime, decided per file in gl/log.cpp. The scopes
+// nest: Render implies Shader, Frame implies Render. Wire values are written
+// to config.json verbatim ("debugScope") and must not be renumbered.
+enum class DebugScope : int {
+    Disabled = 0, // no debug logs (only LOG_E / LOG_F / LOG_W_FORCE)
+    Shader = 1,   // shader, program, framebuffer, glsl
+    Render = 2,   // + texture, buffer, drawing, pixel, getter, enable, gl
+    Frame = 3,    // + egl, gles, multidraw, bench
+    All = 4,      // everything, including config
+    MaxValue
+};
+
 struct Version {
     int Major{0};
     int Minor{0};
@@ -216,6 +229,7 @@ struct global_settings_t {
     Version custom_gl_version;
     FSR1_Quality_Preset fsr1_setting;
     HideMGEnvLevel hide_mg_env_level;
+    DebugScope debug_scope;
 };
 
 extern global_settings_t global_settings;
