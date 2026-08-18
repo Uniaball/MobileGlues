@@ -98,16 +98,31 @@ enum class HideMGEnvLevel : int {
 };
 
 // Which source files the debug logs (LOG_D / LOG_V / LOG_I / LOG_W / LOG())
-// are compiled to emit at runtime, decided per file in gl/log.cpp. The scopes
-// nest: Render implies Shader, Frame implies Render. Wire values are written
-// to config.json verbatim ("debugScope") and must not be renumbered.
+// are compiled to emit at runtime, decided per file in gl/log.cpp. One
+// independent bit per file, any combination (0 = none). Wire values are
+// written to config.json verbatim ("debugScope") and must not be renumbered;
+// the bit order must stay in sync with the plugin's DebugScope enum.
 enum class DebugScope : int {
-    Disabled = 0, // no debug logs (only LOG_E / LOG_F / LOG_W_FORCE)
-    Shader = 1,   // shader, program, framebuffer, glsl
-    Render = 2,   // + texture, buffer, drawing, pixel, getter, enable, gl
-    Frame = 3,    // + egl, gles, multidraw, bench
-    All = 4,      // everything, including config
-    MaxValue
+    Disabled = 0,
+    Shader = 1 << 0,      // gl/shader.cpp
+    Program = 1 << 1,     // gl/program.cpp
+    Framebuffer = 1 << 2, // gl/framebuffer.cpp
+    GlslCache = 1 << 3,   // gl/glsl/cache.cpp
+    GlslForEs = 1 << 4,   // gl/glsl/glsl_for_es.cpp
+    Texture = 1 << 5,     // gl/texture.cpp
+    Buffer = 1 << 6,      // gl/buffer.cpp
+    Drawing = 1 << 7,     // gl/drawing.cpp
+    Pixel = 1 << 8,       // gl/pixel.cpp
+    Getter = 1 << 9,      // gl/getter.cpp
+    Enable = 1 << 10,     // gl/enable.cpp
+    Gl = 1 << 11,         // gl/gl.cpp
+    EglContext = 1 << 12, // egl/context.cpp
+    Egl = 1 << 13,        // egl/egl.cpp
+    EglLoader = 1 << 14,  // egl/loader.cpp
+    GlesLoader = 1 << 15, // gles/loader.cpp
+    Multidraw = 1 << 16,  // gl/multidraw.cpp
+    Bench = 1 << 17,      // bench/multidraw_bench.cpp
+    MaxValue = 1 << 18,
 };
 
 struct Version {

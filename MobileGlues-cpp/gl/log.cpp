@@ -1146,39 +1146,44 @@ void log_unique_function(const char* func_name) {
 #endif
 
 // Runtime debug-scope gate for the LOG_* macros (see DebugScope in
-// config/settings.h). Decided per source file: the configured scope nests, so a
-// file in scope N is also in scope N+1. Paths are matched as substrings with
-// their directory so egl/loader.cpp and gles/loader.cpp stay distinguishable;
-// __FILE__ arrives as either a build-relative or absolute path, both match.
-static bool debug_covers_shader(const char* f) {
-    return strstr(f, "gl/shader.cpp") || strstr(f, "gl/program.cpp") || strstr(f, "gl/framebuffer.cpp") ||
-           strstr(f, "gl/glsl/");
-}
+// config/settings.h). One independent bit per source file, any combination.
+// The bit order must stay in sync with the plugin's DebugScope enum. Paths
+// are matched as substrings with their directory so egl/loader.cpp and
+// gles/loader.cpp stay distinguishable; __FILE__ arrives as either a
+// build-relative or absolute path, both match.
+struct DebugFileEntry {
+    int bit;
+    const char* pattern;
+};
 
-static bool debug_covers_render(const char* f) {
-    return strstr(f, "gl/texture.cpp") || strstr(f, "gl/buffer.cpp") || strstr(f, "gl/drawing.cpp") ||
-           strstr(f, "gl/pixel.cpp") || strstr(f, "gl/getter.cpp") || strstr(f, "gl/enable.cpp") ||
-           strstr(f, "gl/gl.cpp");
-}
-
-static bool debug_covers_frame(const char* f) {
-    return strstr(f, "egl/") || strstr(f, "gles/") || strstr(f, "gl/multidraw.cpp") || strstr(f, "bench/");
-}
+static const DebugFileEntry kDebugFiles[] = {
+    { static_cast<int>(DebugScope::Shader), "gl/shader.cpp" },
+    { static_cast<int>(DebugScope::Program), "gl/program.cpp" },
+    { static_cast<int>(DebugScope::Framebuffer), "gl/framebuffer.cpp" },
+    { static_cast<int>(DebugScope::GlslCache), "gl/glsl/cache.cpp" },
+    { static_cast<int>(DebugScope::GlslForEs), "gl/glsl/glsl_for_es.cpp" },
+    { static_cast<int>(DebugScope::Texture), "gl/texture.cpp" },
+    { static_cast<int>(DebugScope::Buffer), "gl/buffer.cpp" },
+    { static_cast<int>(DebugScope::Drawing), "gl/drawing.cpp" },
+    { static_cast<int>(DebugScope::Pixel), "gl/pixel.cpp" },
+    { static_cast<int>(DebugScope::Getter), "gl/getter.cpp" },
+    { static_cast<int>(DebugScope::Enable), "gl/enable.cpp" },
+    { static_cast<int>(DebugScope::Gl), "gl/gl.cpp" },
+    { static_cast<int>(DebugScope::EglContext), "egl/context.cpp" },
+    { static_cast<int>(DebugScope::Egl), "egl/egl.cpp" },
+    { static_cast<int>(DebugScope::EglLoader), "egl/loader.cpp" },
+    { static_cast<int>(DebugScope::GlesLoader), "gles/loader.cpp" },
+    { static_cast<int>(DebugScope::Multidraw), "gl/multidraw.cpp" },
+    { static_cast<int>(DebugScope::Bench), "bench/multidraw_bench.cpp" },
+};
 
 extern "C" int mg_debug_enabled(const char* file) {
     if (!file) return 0;
-    switch (global_settings.debug_scope) {
-    case DebugScope::Disabled:
-        return 0;
-    case DebugScope::Shader:
-        return debug_covers_shader(file);
-    case DebugScope::Render:
-        return debug_covers_shader(file) || debug_covers_render(file);
-    case DebugScope::Frame:
-        return debug_covers_shader(file) || debug_covers_render(file) || debug_covers_frame(file);
-    case DebugScope::All:
-    default:
-        return 1;
+    const int scope = static_cast<int>(global_settings.debug_scope);
+    if (scope == 0) return 0;
+    for (const DebugFileEntry& entry : kDebugFiles) {
+        if ((scope & entry.bit) != 0 && strstr(file, entry.pattern)) return 1;
     }
+    return 0;
 }
 #endif
