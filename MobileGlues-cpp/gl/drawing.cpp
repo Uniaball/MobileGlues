@@ -178,11 +178,24 @@ void setupBufferTextureUniforms(GLuint program) {
     }
     if (texId == 0) return;
 
+    // Skip the uniforms when the program, texture and dimensions are unchanged:
+    // a different texture is a different id, a resized one a different size, and
+    // re-binding the same texture at the same size leaves the uniforms right by
+    // definition, so the tuple is a complete invalidation check.
     const TextureObject* texObject = mgGetTexObjectByID(texId);
     // mgGetTexObjectByID answers null for a name this layer has no record of. The
     // dimensions are the whole point of these uniforms, so there is nothing useful
     // to write without it.
     if (!texObject) return;
+
+    static thread_local GLuint s_tex_uniform_program = 0;
+    static thread_local GLuint s_tex_uniform_tex = 0;
+    static thread_local GLsizei s_tex_uniform_width = -1;
+    static thread_local GLsizei s_tex_uniform_height = -1;
+    if (s_tex_uniform_program == program && s_tex_uniform_tex == texId &&
+        s_tex_uniform_width == texObject->width && s_tex_uniform_height == texObject->height) {
+        return;
+    }
 
     bool wrote_sampler = false;
     for (const GLint locSampler : info.samplers) {
@@ -194,6 +207,11 @@ void setupBufferTextureUniforms(GLuint program) {
 
     GLES.glUniform1i(info.locWidth, texObject->width);
     GLES.glUniform1i(info.locHeight, texObject->height);
+
+    s_tex_uniform_program = program;
+    s_tex_uniform_tex = texId;
+    s_tex_uniform_width = texObject->width;
+    s_tex_uniform_height = texObject->height;
 }
 
 void prepareForDraw() {
@@ -272,7 +290,12 @@ void glDispatchComputeIndirect(GLintptr indirect) {
 void glMemoryBarrier(GLbitfield barriers) {
     LOG()
     LOG_D("glMemoryBarrier, barriers: %d", barriers)
-    if (program_map_is_atomic_counter_emulated[gl_state->current_program]) {
+    // find() rather than operator[]: this is a frequent sync point, and the
+    // subscript used to insert a default entry for every program the
+    // application ever barriered with. Same fix as the one recorded on
+    // resolve_program above.
+    const auto emu = program_map_is_atomic_counter_emulated.find(gl_state->current_program);
+    if (emu != program_map_is_atomic_counter_emulated.end() && emu->second) {
         barriers |= GL_ATOMIC_COUNTER_BARRIER_BIT;
         barriers |= GL_SHADER_STORAGE_BARRIER_BIT;
     }
@@ -364,13 +387,8 @@ void glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const voi
 
         const size_t bytes = static_cast<size_t>(count) * indexSize;
 
-        // The tracked binding rather than a driver round trip. It is the driver's
-        // name, so it goes straight back to GLES.glBindBuffer, and it is asked for
-        // before the temporary bind below, which is the only window in which this
-        // function makes the two disagree. gl/gl.cpp's depth-clear triangle is the
-        // one path in the layer that leaves the driver on a vertex array the
-        // tracked state does not follow, and the element array binding is vertex
-        // array state; see the note on the accessor in gl/buffer.cpp.
+        // The tracked binding rather than a driver round trip; asked for before the
+        // temporary bind below, the only window in which the two disagree.
         const GLuint prevElementBuffer = mg_driver_bound_buffer(GL_ELEMENT_ARRAY_BUFFER);
 
         void* tempIndices = basevertex_staging(bytes);

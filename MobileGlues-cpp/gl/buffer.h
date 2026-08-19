@@ -40,6 +40,11 @@ extern "C"
 
     GLuint find_bound_ssbo_at_index(GLuint index);
 
+    // The recorded indexed shader storage binding at `index`: the id plus the
+    // range glBindBufferRange was given (size 0 marks a full-buffer glBindBufferBase
+    // binding). False when nothing has been bound there.
+    bool mg_ssbo_binding_at_index(GLuint index, GLuint* id, GLintptr* offset, GLsizeiptr* size);
+
     // Atomic-counter emulation: apply/undo the SSBO binding overrides used
     // while an emulated program draws or dispatches. Only meaningful when
     // global_settings.ext_shader_atomic_counters is on.

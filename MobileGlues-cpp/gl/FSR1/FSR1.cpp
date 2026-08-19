@@ -8,6 +8,7 @@
 #include <mutex>
 #include <ska/flat_hash_map.hpp>
 #include "FSRShaderSource.h"
+#include "../buffer.h"
 #include "../../config/settings.h"
 
 #define DEBUG 0
@@ -64,8 +65,8 @@ enum GLStateBits : unsigned int {
 struct GLStateGuard {
     unsigned int saved;
     GLint prevProgram = 0;
-    GLint prevVAO = 0;
-    GLint prevArrayBuffer = 0;
+    GLuint prevVAO = 0;
+    GLuint prevArrayBuffer = 0;
     GLint prevActiveTexture = GL_TEXTURE0;
     GLint prevTexture = 0;
     GLint prevReadFBO = 0;
@@ -74,8 +75,11 @@ struct GLStateGuard {
 
     explicit GLStateGuard(unsigned int bits) : saved(bits) {
         if (saved & GUARD_PROGRAM) prevProgram = static_cast<GLint>(gl_state->current_program);
-        if (saved & GUARD_VAO) GLES.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
-        if (saved & GUARD_ARRAY_BUFFER) GLES.glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
+        // VAO and ARRAY_BUFFER come from tracked state; the vertex array is tracked in
+        // application names, so the restore maps it with find_real_array. TEXTURE and
+        // RENDERBUFFER stay driver queries -- no tracked counterpart exists for them.
+        if (saved & GUARD_VAO) prevVAO = find_bound_array();
+        if (saved & GUARD_ARRAY_BUFFER) prevArrayBuffer = mg_driver_bound_buffer(GL_ARRAY_BUFFER);
         if (saved & GUARD_TEXTURE) {
             GLES.glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTexture);
             GLES.glActiveTexture(GL_TEXTURE0);
@@ -104,7 +108,7 @@ struct GLStateGuard {
 
     ~GLStateGuard() {
         if (saved & GUARD_PROGRAM) GLES.glUseProgram(prevProgram);
-        if (saved & GUARD_VAO) GLES.glBindVertexArray(prevVAO);
+        if (saved & GUARD_VAO) GLES.glBindVertexArray(prevVAO ? find_real_array(prevVAO) : 0);
         if (saved & GUARD_ARRAY_BUFFER) GLES.glBindBuffer(GL_ARRAY_BUFFER, prevArrayBuffer);
         if (saved & GUARD_TEXTURE) {
             // Unit 0 is current for the guard's lifetime, but say so anyway: a body

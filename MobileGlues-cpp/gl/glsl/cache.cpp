@@ -227,7 +227,15 @@ const char* Cache::get(const char* glsl) {
     flushIfDue();
 
     const size_t length = strlen(glsl);
-    auto hash = computeSHA256(reinterpret_cast<const uint8_t*>(glsl), length);
+    array<uint8_t, 32> hash;
+    if (g_hash_memo_valid && g_hash_memo_source.size() == length &&
+        memcmp(g_hash_memo_source.data(), glsl, length) == 0) {
+        // Same source coming back is all the string compare costs; the digest is
+        // already known, so skip the SHA-256 for repeated translations.
+        hash = g_hash_memo_digest;
+    } else {
+        hash = computeSHA256(reinterpret_cast<const uint8_t*>(glsl), length);
+    }
     auto it = cacheMap.find(hash);
     if (it == cacheMap.end()) {
         // A miss is what put() follows; a hit ends the translation here, so only

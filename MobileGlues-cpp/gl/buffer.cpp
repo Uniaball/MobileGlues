@@ -353,10 +353,8 @@ GLuint find_bound_buffer_by_target(GLenum target) {
 //     GL_DRAW_INDIRECT_BUFFER through GLES.* directly (gl/multidraw.cpp,
 //     gl/drawing.cpp, gl/restart.cpp) saves and restores around its own work, so
 //     they disagree only inside those windows -- ask before the temporary bind,
-//     never during it. gl/gl.cpp's depth-clear triangle is the one path that does
-//     not: it leaves the driver on vertex array 0 and GL_ARRAY_BUFFER 0 without
-//     putting the application's back, which desynchronises the element array
-//     binding too, since that is vertex array state.
+//     never during it. gl/gl.cpp's depth-clear triangle used to be the one path
+//     that did not; it now restores what it takes over.
 //
 // GL_PARAMETER_BUFFER has no GLES binding at all; the mapped name is returned for
 // it anyway, because gl/multidraw.cpp is the only thing that asks and it needs the
@@ -630,6 +628,17 @@ GLuint find_bound_ssbo_at_index(GLuint index) {
     return g_buffer_map_ssbo_id[index];
 }
 
+bool mg_ssbo_binding_at_index(GLuint index, GLuint* id, GLintptr* offset, GLsizeiptr* size) {
+    if (g_buffer_map_ssbo_id.empty() || index >= g_buffer_map_ssbo_id.size()) return false;
+    if (id != nullptr) *id = g_buffer_map_ssbo_id[index];
+    if (offset != nullptr || size != nullptr) {
+        const ssbo_binding_info& info = g_buffer_map_ssbo_info[index];
+        if (offset != nullptr) *offset = info.offset;
+        if (size != nullptr) *size = info.size;
+    }
+    return true;
+}
+
 // Resolve a GL_ATOMIC_COUNTER_BUFFER indexed binding to the range the emulated
 // SSBO has to present at the same index. A size < 0 is the glBindBufferBase
 // marker: the range is the whole buffer, discovered here because the app may
@@ -645,7 +654,13 @@ void bindAllAtomicCounterAsSSBO() {
     if (!global_settings.ext_shader_atomic_counters) return;
     // Only the bindings of buffers the current program actually references as
     // atomic counters get overridden; everything else must be left alone.
-    if (!program_map_is_atomic_counter_emulated[gl_state->current_program]) return;
+    //
+    // find() rather than operator[]: this used to insert a default-constructed
+    // entry for every program the application ever drew with, on the draw path,
+    // and could rehash the map while doing it. Same fix as the one recorded on
+    // resolve_program in gl/drawing.cpp.
+    const auto emu = program_map_is_atomic_counter_emulated.find(gl_state->current_program);
+    if (emu == program_map_is_atomic_counter_emulated.end() || !emu->second) return;
     const size_t count = g_buffer_map_atomic_buffer_info.size();
     if (count == 0) return;
     if (g_atomic_ssbo_saved.size() < count) g_atomic_ssbo_saved.resize(count, {0, 0, 0, true});
@@ -736,6 +751,9 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
         GLES.glBindBufferRange(target, index, buffer, offset, size);
         if (target == GL_SHADER_STORAGE_BUFFER) {
             record_ssbo_binding(index, 0, 0, 0, true);
+            // The driver sets the generic binding along with the indexed one;
+            // record it so the tracking keeps pace.
+            set_bound_buffer_by_target(GL_SHADER_STORAGE_BUFFER, buffer);
         }
         CHECK_GL_ERROR
         return;
@@ -749,6 +767,7 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
     GLES.glBindBufferRange(target, index, real_buffer, offset, size);
     if (target == GL_SHADER_STORAGE_BUFFER) {
         record_ssbo_binding(index, buffer, offset, size, false);
+        set_bound_buffer_by_target(GL_SHADER_STORAGE_BUFFER, buffer);
     }
     CHECK_GL_ERROR
 }
@@ -779,6 +798,9 @@ void glBindBufferBase(GLenum target, GLuint index, GLuint buffer) {
         GLES.glBindBufferBase(target, index, buffer);
         if (target == GL_SHADER_STORAGE_BUFFER) {
             record_ssbo_binding(index, 0, 0, 0, true);
+            // The driver sets the generic binding along with the indexed one;
+            // record it so the tracking keeps pace.
+            set_bound_buffer_by_target(GL_SHADER_STORAGE_BUFFER, buffer);
         }
         CHECK_GL_ERROR
         return;
@@ -792,6 +814,7 @@ void glBindBufferBase(GLenum target, GLuint index, GLuint buffer) {
     GLES.glBindBufferBase(target, index, real_buffer);
     if (target == GL_SHADER_STORAGE_BUFFER) {
         record_ssbo_binding(index, buffer, 0, 0, true);
+        set_bound_buffer_by_target(GL_SHADER_STORAGE_BUFFER, buffer);
     }
     CHECK_GL_ERROR
 }

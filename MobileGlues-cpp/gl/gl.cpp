@@ -14,6 +14,8 @@
 #include "../config/settings.h"
 #include "mg.h"
 #include "framebuffer.h"
+#include "buffer.h"
+#include "program.h"
 #include "../egl/context.h"
 #include <mutex>
 #include <memory>
@@ -130,6 +132,13 @@ void InitDepthClearCoreProfile() {
 }
 
 void DrawDepthClearTri() {
+    // Save what the driver holds, before InitDepthClearCoreProfile binds anything.
+    // This triangle changes program, vertex array and array buffer behind the
+    // tracking's back; restoring them keeps the tracking and the driver in step.
+    const GLuint prevProgram = gl_state ? gl_state->current_program : 0;
+    const GLuint prevVao = find_bound_array();
+    const GLuint prevVbo = find_bound_buffer_by_target(GL_ARRAY_BUFFER);
+
     InitDepthClearCoreProfile();
     depth_clear_objects_t& obj = depth_clear_objects();
 
@@ -153,6 +162,13 @@ void DrawDepthClearTri() {
     GLES.glDepthFunc(prevDepthFunc);
     GLES.glDepthMask(prevDepthMask);
     GLES.glColorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
+
+    // Back through the frontend so the tracked bindings are re-derived from
+    // the same values (the ELEMENT_ARRAY_BUFFER mirror is vertex array state,
+    // and glBindVertexArray restores it along with the array).
+    glUseProgram(prevProgram);
+    glBindVertexArray(prevVao);
+    glBindBuffer(GL_ARRAY_BUFFER, prevVbo);
 }
 
 void glClear(GLbitfield mask) {

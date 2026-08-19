@@ -1180,10 +1180,27 @@ static const DebugFileEntry kDebugFiles[] = {
 extern "C" int mg_debug_enabled(const char* file) {
     if (!file) return 0;
     const int scope = static_cast<int>(global_settings.debug_scope);
-    if (scope == 0) return 0;
-    for (const DebugFileEntry& entry : kDebugFiles) {
-        if ((scope & entry.bit) != 0 && strstr(file, entry.pattern)) return 1;
+    // Shipping builds leave the scope empty; expect that so every LOG() gate
+    // falls through a single predicted branch.
+    if (__builtin_expect(scope == 0, 1)) return 0;
+    // With a scope set, a file's verdict is stable until the scope or file
+    // changes; cache the last one per thread instead of rescanning per call.
+    thread_local const char* tls_last_file = nullptr;
+    thread_local int tls_last_scope = 0;
+    thread_local int tls_last_verdict = 0;
+    if (__builtin_expect(file == tls_last_file && scope == tls_last_scope, 1)) {
+        return tls_last_verdict;
     }
-    return 0;
+    int verdict = 0;
+    for (const DebugFileEntry& entry : kDebugFiles) {
+        if ((scope & entry.bit) != 0 && strstr(file, entry.pattern)) {
+            verdict = 1;
+            break;
+        }
+    }
+    tls_last_file = file;
+    tls_last_scope = scope;
+    tls_last_verdict = verdict;
+    return verdict;
 }
 #endif

@@ -137,13 +137,8 @@ bool mg_draw_elements_restart(GLenum mode, GLsizei count, GLenum type, const voi
 
     const GLuint restart_value = mg_enable_state()->primitive_restart_index;
 
-    // The tracked binding instead of asking the driver: mg_driver_bound_buffer
-    // answers with the driver-side name, which is exactly what the two
-    // glBindBuffer calls below need, and it is read here at entry, before this
-    // function binds the scratch buffer over it. The only path that can leave the
-    // driver's element array binding disagreeing with the tracked one is
-    // gl/gl.cpp's ANGLE depth-clear triangle, and it does that by leaving vertex
-    // array 0 bound, which makes the draw itself wrong either way.
+    // The tracked binding instead of asking the driver; asked for here, before
+    // this function binds the scratch buffer over it.
     const GLuint prev_ibo = mg_driver_bound_buffer(GL_ELEMENT_ARRAY_BUFFER);
 
     // Grown but never shrunk, and thread_local for the same reason g_restart_ibo
