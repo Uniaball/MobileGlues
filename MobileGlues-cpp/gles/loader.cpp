@@ -144,8 +144,38 @@ void load_libs() {
         LOG_E("ANGLE was requested but was not loaded; running on the system driver\n")
     }
 #else
-    gles = (void*)(~(uintptr_t)0);
-    egl = (void*)(~(uintptr_t)0);
+    // iOS: the launcher dlopens this library with RTLD_LOCAL, so the
+    // libEGL.framework / libGLESv2.framework images we link against are not in
+    // global scope, and dlsym(RTLD_NEXT) -- what the ~(uintptr_t)0 handle below
+    // used to resolve through -- finds nothing after us. Every EGL entry point
+    // came back NULL and init_target_egl jumped through one (SIGSEGV at pc=0).
+    // Locate our own image with dladdr, open the two frameworks sitting next to
+    // us explicitly, RTLD_GLOBAL so their symbols answer later lookups too.
+    Dl_info info;
+    if (dladdr((void*)load_libs, &info) && info.dli_fname) {
+        const char* lastSlash = strrchr(info.dli_fname, '/');
+        if (lastSlash) {
+            size_t dirLen = (size_t)(lastSlash - info.dli_fname) + 1;
+            char egl_path[PATH_MAX + 1];
+            char gles_path[PATH_MAX + 1];
+            memcpy(egl_path, info.dli_fname, dirLen);
+            strcpy(egl_path + dirLen, "libEGL.framework/libEGL");
+            memcpy(gles_path, info.dli_fname, dirLen);
+            strcpy(gles_path + dirLen, "libGLESv2.framework/libGLESv2");
+            egl = dlopen(egl_path, RTLD_GLOBAL | RTLD_NOW);
+            if (egl == NULL) {
+                LOG_W_FORCE("load_libs: dlopen libEGL failed: %s\n", dlerror())
+            }
+            gles = dlopen(gles_path, RTLD_GLOBAL | RTLD_NOW);
+            if (gles == NULL) {
+                LOG_W_FORCE("load_libs: dlopen libGLESv2 failed: %s\n", dlerror())
+            }
+        }
+    }
+    // Fall back to the old RTLD_NEXT behaviour when the explicit open failed,
+    // e.g. because the frameworks are not next to this library.
+    if (egl == NULL) egl = (void*)(~(uintptr_t)0);
+    if (gles == NULL) gles = (void*)(~(uintptr_t)0);
 #endif
 }
 

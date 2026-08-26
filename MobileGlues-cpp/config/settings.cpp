@@ -20,23 +20,6 @@ global_settings_t global_settings;
 static void parse_multidraw_orders();
 
 void init_settings() {
-#if defined(__APPLE__)
-    global_settings.angle = AngleMode::Disabled;
-    global_settings.angle_config = AngleConfig::DisableIfPossible;
-    global_settings.angle_supported = false;
-    global_settings.ignore_error = IgnoreErrorLevel::Partial;
-    global_settings.ext_compute_shader = false;
-    global_settings.ext_shader_atomic_counters = false;
-    global_settings.max_glsl_cache_size = 30 * 1024 * 1024;
-    global_settings.angle_depth_clear_fix_mode = AngleDepthClearFixMode::Disabled;
-    global_settings.ext_direct_state_access = true;
-    global_settings.custom_gl_version = {0, 0, 0}; // will go default
-    global_settings.fsr1_setting = FSR1_Quality_Preset::Disabled;
-    global_settings.hide_mg_env_level = HideMGEnvLevel::Disabled;
-    global_settings.debug_scope = DebugScope::Disabled;
-
-#else
-
     int success = initialized;
     if (!success) {
         success = config_refresh();
@@ -229,7 +212,6 @@ void init_settings() {
     global_settings.fsr1_setting = fsr1Setting;
     global_settings.hide_mg_env_level = hideMGEnvLevel;
     global_settings.debug_scope = debugScope;
-#endif
 
     LOG_V("[MobileGlues] Setting: enableAngle                 = %s",
           global_settings.angle == AngleMode::Enabled ? "true" : "false")
