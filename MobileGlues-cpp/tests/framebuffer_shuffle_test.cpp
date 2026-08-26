@@ -18,6 +18,10 @@ void set_gl_state_current_draw_fbo(GLuint v) { gl_state->current_draw_fbo = v; }
 void mg_set_gl_error(GLenum) {}
 int __android_log_print(int, const char*, const char*, ...) { return 0; }
 extern "C" void write_log(const char*, ...) {}
+// Per-file debug scopes and enum names arrived with the hot-path work; the
+// shuffle logic under test never consults either, so empty stubs do.
+extern "C" int mg_debug_enabled(const char*) { return 0; }
+const char* glEnumToString(GLenum) { return "?"; }
 global_settings_t global_settings{};
 gl_state_s g_default_gl_state{};
 thread_local gl_state_t gl_state = &g_default_gl_state;

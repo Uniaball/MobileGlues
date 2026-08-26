@@ -18,6 +18,10 @@ thread_local gl_state_t gl_state = &g_default_gl_state;
 void mg_set_gl_error(GLenum) {}
 extern "C" void write_log(const char*, ...) {}
 int __android_log_print(int, const char*, const char*, ...) { return 0; }
+// Per-file debug scopes and enum names arrived with the hot-path work; the
+// pure size tables under test never consult either, so empty stubs do.
+extern "C" int mg_debug_enabled(const char*) { return 0; }
+const char* glEnumToString(GLenum) { return "?"; }
 
 static int fails = 0;
 static void eq(const char* what, long got, long want) {
