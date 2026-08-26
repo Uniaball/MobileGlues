@@ -28,7 +28,7 @@
 // of them carry the same MAJOR.MINOR.REVISION, and a bug report has to be able to
 // name which one it came from. Bump this whenever a build leaves this machine.
 #if VERSION_TYPE == VERSION_DEVELOPMENT
-#define VERSION_DEV_NUMBER 1
+#define VERSION_DEV_NUMBER 2
 #endif
 
 #define VERSION_SUFFIX ""

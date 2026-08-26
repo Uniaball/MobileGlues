@@ -240,6 +240,15 @@ void trim(std::string& str) {
     str.erase(std::find_if(str.rbegin(), str.rend(), [](int ch) { return !std::isspace(ch); }).base(), str.end());
 }
 
+bool is_glsl_identifier(const std::string& s) {
+    if (s.empty()) return false;
+    if (s[0] != '_' && !std::isalpha(static_cast<unsigned char>(s[0]))) return false;
+    for (size_t i = 1; i < s.size(); ++i) {
+        if (s[i] != '_' && !std::isalnum(static_cast<unsigned char>(s[i]))) return false;
+    }
+    return true;
+}
+
 std::string process_uniform_declarations(const std::string& glslCode) {
     std::string result;
     size_t scan_pos = 0;
@@ -250,7 +259,14 @@ std::string process_uniform_declarations(const std::string& glslCode) {
     result.reserve(glslCode.length());
 
     while (scan_pos < length) {
-        if (glslCode.compare(scan_pos, 7, "uniform") == 0) {
+        // "uniform" only opens a declaration when it starts a token. Minecraft
+        // 26.x mangles uniform-block instances to names like
+        // `_uniform_instance_00_00`, and the bare substring match used to fire
+        // inside such identifiers and wreck the statement around them.
+        const bool starts_token =
+            scan_pos == 0 ||
+            !(std::isalnum(static_cast<unsigned char>(glslCode[scan_pos - 1])) || glslCode[scan_pos - 1] == '_');
+        if (starts_token && glslCode.compare(scan_pos, 7, "uniform") == 0) {
             if (scan_pos > chunk_start) {
                 result.append(glslCode, chunk_start, scan_pos - chunk_start);
             }
@@ -321,7 +337,14 @@ std::string process_uniform_declarations(const std::string& glslCode) {
             else
                 ++decl_end;
             const bool has_initializer = (glslCode.find('=', scan_pos) < decl_end);
-            if (has_initializer) {
+            // The rewrite drops everything between the name and the ';', so it
+            // may only run when both the type and the name parsed cleanly.
+            // Anything else -- a lookalike that slipped past the boundary
+            // check, preprocessor text, prose in a comment -- passes through
+            // untouched: a missed conversion is diagnosable, corrupted source
+            // is not (13 cached terrain shaders were mangled this way).
+            const bool parsable = is_glsl_identifier(type) && is_glsl_identifier(name);
+            if (has_initializer && parsable) {
                 result.append("uniform").append(precision).append(" ").append(type).append(" ").append(name).append(";");
             } else {
                 result.append(glslCode, decl_start, decl_end - decl_start);
