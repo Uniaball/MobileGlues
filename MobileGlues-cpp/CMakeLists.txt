@@ -175,6 +175,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     gl/ExtWrappers/DSAWrapper.cpp
     gl/ExtWrappers/MultiBindWrapper.cpp
     gl/glsl/glsl_for_es.cpp
+    gl/glsl/uniform_defaults.cpp
     gl/glsl/cache.cpp
     gl/FSR1/FSR1.cpp
     gl/vertexattrib.cpp
@@ -209,8 +210,9 @@ if (NOT MSVC AND NOT APPLE)
     # symbols stay exported for dlsym and eglGetProcAddress; only who internal
     # calls bind to changes. On the target, not in the AppleClang-guarded block
     # above -- that block's condition has never been true (dangling NOT MATCHES),
-    # which is also why --gc-sections never made it into the link. Darwin's ld64
-    # has no -Bsymbolic-functions; Apple ld does not support it.
+    # which is also why --gc-sections never made it into the link. Not on Apple:
+    # ld64 has no -Bsymbolic-functions and fails the link on it, and its
+    # two-level namespace already binds internal calls to this library.
     target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -Wl,-Bsymbolic-functions)
 endif()
 

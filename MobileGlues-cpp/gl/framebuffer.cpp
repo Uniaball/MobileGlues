@@ -346,6 +346,11 @@ void restore_home_attachments(framebuffer_t& fbo) {
 // defines, and moving them here quietly dropped three of the 500-odd aliases the
 // library exports. An application that resolves glDeleteFramebuffersARB, as
 // anything written against EXT_framebuffer_object does, got a null pointer.
+//
+// Not on Apple: Mach-O has no symbol aliases and clang refuses the attribute
+// there ("aliases are not supported on darwin"), which is why
+// NATIVE_FUNCTION_HEAD leaves the ARB names out on that platform as well.
+#ifndef __APPLE__
 extern "C" {
 #ifndef __APPLE__
 GLAPI GLAPIENTRY void glDeleteFramebuffersARB(GLsizei n, const GLuint* names) __attribute__((alias("glDeleteFramebuffers")));
@@ -369,6 +374,7 @@ GLAPI GLAPIENTRY void glFramebufferTextureLayerARB(GLenum target, GLenum attachm
 }
 #endif
 }
+#endif
 
 // Wrapped for the same reason glReadPixels is: the source is the read framebuffer,
 // and while FSR1 is on the application's framebuffer 0 is not where its frame is.

@@ -26,6 +26,11 @@ UnorderedMap<GLuint, bool> shader_map_is_atomic_counter_emulated;
 
 UnorderedMap<GLuint, std::vector<AtomicBufferBinding>> shader_map_atomic_bindings;
 
+// The uniform initialisers stripped from each translated shader, applied by
+// glLinkProgram once a program using the shader links. A shader without any has
+// no entry.
+UnorderedMap<GLuint, std::vector<uniform_default_t>> shader_uniform_defaults;
+
 bool can_run_essl3(unsigned int esversion, const char* glsl) {
     if (strncmp(glsl, "#version 100", 12) == 0) {
         return true;
@@ -56,11 +61,11 @@ bool check_if_sampler_buffer_used(const std::string& str) {
 
 void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length) {
     LOG()
-    ShaderInfo& info = g_shaderInfos[shader];
+ShaderInfo& info = g_shaderInfos[shader];
     info.converted.clear();
     info.frag_data_changed_converted.clear();
     info.frag_data_changed = 0;
-
+    shader_uniform_defaults.erase(shader);
     size_t l = 0;
     for (int i = 0; i < count; i++) l += (length && length[i] >= 0) ? length[i] : strlen(string[i]);
 
@@ -103,7 +108,8 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
         LOG_D("%s", glsl_src.c_str())
 
         int return_code = 0;
-        essl_src = GLSLtoGLSLES(glsl_src.c_str(), shaderType, es_version, glsl_version, return_code);
+        std::vector<uniform_default_t> uniform_defaults;
+        essl_src = GLSLtoGLSLES(glsl_src.c_str(), shaderType, es_version, glsl_version, return_code, &uniform_defaults);
 
         if (return_code == 1) {
             shader_map_is_atomic_counter_emulated[shader] = true;
@@ -114,7 +120,10 @@ void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, c
             LOG_E("Failed to convert shader %d. Falling back to original desktop GLSL – rendering may break.", shader);
             essl_src = glsl_src;
         }
-
+        if (!uniform_defaults.empty()) {
+            LOG_D("[INFO] [Shader] %zu uniform default(s) kept for shader %u", uniform_defaults.size(), shader)
+            shader_uniform_defaults[shader] = std::move(uniform_defaults);
+        }
         LOG_D("\n[INFO] [Shader] Converted Shader source: \n%s", essl_src.c_str())
     }
 
