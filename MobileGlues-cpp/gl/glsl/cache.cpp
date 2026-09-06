@@ -6,6 +6,7 @@
 // End of Source File Header
 
 #include "cache.h"
+#include "xxhash64.h"
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -14,133 +15,38 @@
 
 using namespace std;
 
-// SHA256
-static const uint32_t k[64] = {
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
-
 namespace {
-    inline uint32_t rotr(uint32_t x, uint32_t n) {
-        return (x >> n) | (x << (32 - n));
-    }
-    inline uint32_t sigma0(uint32_t x) {
-        return rotr(x, 7) ^ rotr(x, 18) ^ (x >> 3);
-    }
-    inline uint32_t sigma1(uint32_t x) {
-        return rotr(x, 17) ^ rotr(x, 19) ^ (x >> 10);
-    }
-    inline uint32_t Sigma0(uint32_t x) {
-        return rotr(x, 2) ^ rotr(x, 13) ^ rotr(x, 22);
-    }
-    inline uint32_t Sigma1(uint32_t x) {
-        return rotr(x, 6) ^ rotr(x, 11) ^ rotr(x, 25);
-    }
-    inline uint32_t ch(uint32_t x, uint32_t y, uint32_t z) {
-        return (x & y) ^ (~x & z);
-    }
-    inline uint32_t maj(uint32_t x, uint32_t y, uint32_t z) {
-        return (x & y) ^ (x & z) ^ (y & z);
-    }
+    // Two seeds far enough apart to be independent in practice: the two halves
+    // of the key fall on different 64-bit hash lanes, so a collision needs both
+    // XXH64 passes to meet on the same source, which is the same astronomically
+    // low bar the 256-bit digest used to set.
+    constexpr uint64_t kKeySeedHi = 0xC2B2AE3D27D4EB4FULL;
+    constexpr uint64_t kKeySeedLo = 0x9E3779B97F4A7C15ULL;
 
-    void sha256_compress(uint32_t h[8], const uint8_t* block) {
-        uint32_t w[64];
-        for (int t = 0; t < 16; ++t) {
-            // Widen before shifting: a uint8_t promotes to int, and 0xff << 24
-            // overflows a signed int.
-            w[t] = (static_cast<uint32_t>(block[t * 4]) << 24) | (static_cast<uint32_t>(block[t * 4 + 1]) << 16) |
-                   (static_cast<uint32_t>(block[t * 4 + 2]) << 8) | static_cast<uint32_t>(block[t * 4 + 3]);
-        }
-
-        for (int t = 16; t < 64; ++t) {
-            w[t] = sigma1(w[t - 2]) + w[t - 7] + sigma0(w[t - 15]) + w[t - 16];
-        }
-
-        uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
-
-        for (int t = 0; t < 64; ++t) {
-            uint32_t T1 = hh + Sigma1(e) + ch(e, f, g) + k[t] + w[t];
-            uint32_t T2 = Sigma0(a) + maj(a, b, c);
-            hh = g;
-            g = f;
-            f = e;
-            e = d + T1;
-            d = c;
-            c = b;
-            b = a;
-            a = T1 + T2;
-        }
-
-        h[0] += a;
-        h[1] += b;
-        h[2] += c;
-        h[3] += d;
-        h[4] += e;
-        h[5] += f;
-        h[6] += g;
-        h[7] += hh;
-    }
+    // First bytes of the on-disk format. Anything the other way is a pre-xxh3
+    // cache whose entries were keyed on a digest that cannot be rediscovered
+    // from the source alone; such a file is passed over and rewritten by the
+    // next save(). SEE ALSO: load()'s comment.
+    constexpr char kFormatMagic[4] = {'M', 'G', 'C', 'S'};
+    constexpr uint32_t kFormatVersion = 1;
 } // namespace
 
-// Streamed over the caller's buffer. This used to copy the whole shader source
-// into a vector first, only to append nine to seventy-two bytes of padding to
-// it -- a full allocation and copy of the source on top of the hash itself.
-// Only the final partial block is materialised now. Digests are unchanged bit
-// for bit, so caches written by
-// earlier builds still hit; that was checked against the previous
-// implementation over every length up to 300 plus random multi-block inputs,
-// and against the FIPS 180-4 vectors.
-array<uint8_t, 32> Cache::computeSHA256(const uint8_t* data, size_t length) {
-    uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
-
-    size_t offset = 0;
-    for (; length - offset >= 64; offset += 64) {
-        sha256_compress(h, data + offset);
-    }
-
-    // The tail is the remainder, a 0x80 byte, zero padding, and the message
-    // length in bits as a big-endian uint64. It needs a second block exactly
-    // when the remainder plus the 0x80 leaves no room for those eight bytes.
-    const size_t remainder = length - offset;
-    uint8_t tail[128] = {0};
-    if (remainder > 0) memcpy(tail, data + offset, remainder);
-    tail[remainder] = 0x80;
-    const size_t tail_size = (remainder < 56) ? 64 : 128;
-
-    // Widened before the multiply: on 32-bit ABIs a size_t multiply would wrap
-    // at 512 MB of source and the two ABIs would then disagree on the digest.
-    const uint64_t bit_length = static_cast<uint64_t>(length) * 8;
-    for (int i = 0; i < 8; ++i) {
-        tail[tail_size - 8 + i] = static_cast<uint8_t>(bit_length >> (56 - i * 8));
-    }
-    for (size_t i = 0; i < tail_size; i += 64) {
-        sha256_compress(h, tail + i);
-    }
-
-    array<uint8_t, 32> hash{};
-    for (int i = 0; i < 8; ++i) {
-        hash[i * 4] = static_cast<uint8_t>(h[i] >> 24);
-        hash[i * 4 + 1] = static_cast<uint8_t>(h[i] >> 16);
-        hash[i * 4 + 2] = static_cast<uint8_t>(h[i] >> 8);
-        hash[i * 4 + 3] = static_cast<uint8_t>(h[i]);
-    }
-    return hash;
+Cache::CacheKey Cache::computeKey(const uint8_t* data, size_t length) {
+    CacheKey key{};
+    const uint64_t lo = XXHash64::hash(data, length, kKeySeedLo);
+    const uint64_t hi = XXHash64::hash(data, length, kKeySeedHi);
+    memcpy(key.data(), &lo, sizeof(lo));
+    memcpy(key.data() + sizeof(lo), &hi, sizeof(hi));
+    return key;
 }
 
-size_t Cache::SHA256Hash::operator()(const array<uint8_t, 32>& key) const {
-    size_t hash = 0;
-    for (int i = 0; i < 4; ++i) {
-        hash = (hash << 8) | key[i];
-    }
-    for (int i = 28; i < 32; ++i) {
-        hash = (hash << 8) | key[i];
-    }
-    return hash;
+size_t Cache::KeyHash::operator()(const CacheKey& key) const {
+    // XXH64 lanes are already well mixed; whichever half lands on the first
+    // bytes of the machine word hashes the map's buckets well enough, and this
+    // stays endian-consistent because get/put/load all produce the same bytes.
+    uint64_t half;
+    memcpy(&half, key.data(), sizeof(half));
+    return static_cast<size_t>(half);
 }
 
 // Persistence policy.
@@ -181,28 +87,27 @@ namespace {
     // -- once to discover the miss, once to file what the translator produced --
     // and shader pack sources run to tens of kilobytes, so hashing twice per
     // compile is half the hashing done for nothing. A missing get() parks its
-    // digest here together with the bytes it was computed from, and put() reuses
+    // key here together with the bytes it was computed from, and put() reuses
     // it when the source matches byte for byte.
     //
     // The match has to be on content. Keying on the pointer would be wrong: the
     // caller hashes a local std::string, so a later compile can hand back the
     // same address holding different text, and a false match would file one
-    // shader's ESSL under another shader's hash -- a silently wrong program for
-    // as long as the cache lives. The memcmp that rules that out is still one to
-    // two orders of magnitude cheaper than the SHA-256 it replaces.
+    // shader's ESSL under another shader's key -- a silently wrong program for
+    // as long as the cache lives. The memcmp that rules that out is still
+    // cheaper than the hashing it defers.
     //
-    // thread_local, not members, because the pair is always issued from one
-    // thread while this class takes no lock anywhere: two threads translating at
-    // once could otherwise interleave the two stores and leave one thread's
-    // bytes standing next to the other thread's digest.
-    thread_local string g_hash_memo_source;
-    thread_local array<uint8_t, 32> g_hash_memo_digest{};
-    thread_local bool g_hash_memo_valid = false;
+    // The pair lives in the class as thread_local statics; only one thread ever
+    // issues them at a time, since this class takes no lock anywhere.
 } // namespace
 
+thread_local string Cache::s_memo_source;
+thread_local Cache::CacheKey Cache::s_memo_key{};
+thread_local bool Cache::s_memo_valid = false;
+
 Cache::Cache() {
-    load();
     lastSaveNs = monotonic_now_ns();
+    load();
 }
 
 Cache::~Cache() {
@@ -227,23 +132,23 @@ const char* Cache::get(const char* glsl) {
     flushIfDue();
 
     const size_t length = strlen(glsl);
-    array<uint8_t, 32> hash;
-    if (g_hash_memo_valid && g_hash_memo_source.size() == length &&
-        memcmp(g_hash_memo_source.data(), glsl, length) == 0) {
-        // Same source coming back is all the string compare costs; the digest is
-        // already known, so skip the SHA-256 for repeated translations.
-        hash = g_hash_memo_digest;
+    CacheKey key;
+    if (s_memo_valid && s_memo_source.size() == length &&
+        memcmp(s_memo_source.data(), glsl, length) == 0) {
+        // Same source coming back is all the string compare costs; the key is
+        // already known, so skip the XXH64 passes for repeated translations.
+        key = s_memo_key;
     } else {
-        hash = computeSHA256(reinterpret_cast<const uint8_t*>(glsl), length);
+        key = computeKey(reinterpret_cast<const uint8_t*>(glsl), length);
     }
-    auto it = cacheMap.find(hash);
+    auto it = cacheMap.find(key);
     if (it == cacheMap.end()) {
         // A miss is what put() follows; a hit ends the translation here, so only
         // the miss is worth remembering.
-        g_hash_memo_valid = false;
-        g_hash_memo_source.assign(glsl, length);
-        g_hash_memo_digest = hash;
-        g_hash_memo_valid = true;
+        s_memo_valid = false;
+        s_memo_source.assign(glsl, length);
+        s_memo_key = key;
+        s_memo_valid = true;
         return nullptr;
     }
 
@@ -255,25 +160,25 @@ void Cache::put(const char* glsl, const char* essl) {
     if (global_settings.max_glsl_cache_size <= 0) return;
 
     const size_t length = strlen(glsl);
-    array<uint8_t, 32> hash;
-    if (g_hash_memo_valid && g_hash_memo_source.size() == length &&
-        memcmp(g_hash_memo_source.data(), glsl, length) == 0) {
-        hash = g_hash_memo_digest;
+    CacheKey key;
+    if (s_memo_valid && s_memo_source.size() == length &&
+        memcmp(s_memo_source.data(), glsl, length) == 0) {
+        key = s_memo_key;
     } else {
-        hash = computeSHA256(reinterpret_cast<const uint8_t*>(glsl), length);
+        key = computeKey(reinterpret_cast<const uint8_t*>(glsl), length);
     }
     size_t esslStrSize = strlen(essl) + 1;
 
-    size_t entryMemory = sizeof(CacheEntry::sha256) + sizeof(size_t) + esslStrSize;
+    size_t entryMemory = sizeof(CacheKey) + sizeof(size_t) + esslStrSize;
 
-    if (auto it = cacheMap.find(hash); it != cacheMap.end()) {
-        cacheSize -= (sizeof(CacheEntry::sha256) + sizeof(size_t) + it->second->size);
+    if (auto it = cacheMap.find(key); it != cacheMap.end()) {
+        cacheSize -= (sizeof(CacheKey) + sizeof(size_t) + it->second->size);
         cacheList.erase(it->second);
         cacheMap.erase(it);
     }
 
-    cacheList.emplace_back(CacheEntry{hash, essl, esslStrSize});
-    cacheMap[hash] = prev(cacheList.end());
+    cacheList.emplace_back(CacheEntry{key, essl, esslStrSize});
+    cacheMap[key] = prev(cacheList.end());
     cacheSize += entryMemory;
 
     maintainCacheSize();
@@ -285,9 +190,9 @@ void Cache::maintainCacheSize() {
     if (global_settings.max_glsl_cache_size <= 0) return;
     while (cacheSize > global_settings.max_glsl_cache_size && !cacheList.empty()) {
         const auto& oldEntry = cacheList.front();
-        size_t removedMemory = sizeof(CacheEntry::sha256) + sizeof(size_t) + oldEntry.size;
+        size_t removedMemory = sizeof(CacheKey) + sizeof(size_t) + oldEntry.size;
         cacheSize -= removedMemory;
-        cacheMap.erase(oldEntry.sha256);
+        cacheMap.erase(oldEntry.key);
         cacheList.pop_front();
     }
 }
@@ -300,26 +205,39 @@ bool Cache::load() {
         ifstream file(glsl_cache_file_path, ios::binary);
         if (!file) return false;
 
+        // Versioned since the cache stopped keying on SHA-256. A file without
+        // the magic is a pre-versioned build: its entries were keyed on a digest
+        // that cannot be recomputed from a source string, so there is no way to
+        // look any of them up. Those bytes are simply not worth reading -- the
+        // cache is regenerable -- and the next save() writes the current format
+        // over them. (The count came first in that format, so this is also what
+        // a corrupted or truncated file lands on.)
+        char magic[4];
+        uint32_t version;
+        file.read(magic, sizeof(magic));
+        file.read(reinterpret_cast<char*>(&version), sizeof(version));
+        if (memcmp(magic, kFormatMagic, sizeof(magic)) != 0 || version != kFormatVersion) return true;
+
         size_t count;
         file.read(reinterpret_cast<char*>(&count), sizeof(count));
 
-        while (count--) {
-            array<uint8_t, 32> hash{};
+        while (count-- && file.good()) {
+            CacheKey key{};
             size_t esslSize;
 
-            file.read(reinterpret_cast<char*>(hash.data()), hash.size());
+            file.read(reinterpret_cast<char*>(key.data()), key.size());
             file.read(reinterpret_cast<char*>(&esslSize), sizeof(esslSize));
 
             string essl(esslSize, '\0');
             file.read(essl.data(), (long)esslSize);
 
-            if (cacheMap.count(hash)) continue;
+            if (cacheMap.count(key)) continue;
 
-            size_t entryMemory = sizeof(CacheEntry::sha256) + sizeof(size_t) + esslSize;
+            size_t entryMemory = sizeof(CacheKey) + sizeof(size_t) + esslSize;
             cacheSize += entryMemory;
 
-            cacheList.emplace_back(CacheEntry{hash, move(essl), esslSize});
-            cacheMap[hash] = prev(cacheList.end());
+            cacheList.emplace_back(CacheEntry{key, move(essl), esslSize});
+            cacheMap[key] = prev(cacheList.end());
         }
 
         maintainCacheSize();
@@ -358,11 +276,14 @@ void Cache::save() {
         ofstream file(temp_path, ios::binary);
         if (!file) return;
 
+        file.write(kFormatMagic, sizeof(kFormatMagic));
+        file.write(reinterpret_cast<const char*>(&kFormatVersion), sizeof(kFormatVersion));
+
         size_t count = cacheList.size();
         file.write(reinterpret_cast<const char*>(&count), sizeof(count));
 
         for (const auto& entry : cacheList) {
-            file.write(reinterpret_cast<const char*>(entry.sha256.data()), (long)entry.sha256.size());
+            file.write(reinterpret_cast<const char*>(entry.key.data()), (long)entry.key.size());
             size_t esslSize = entry.size;
             file.write(reinterpret_cast<const char*>(&esslSize), sizeof(esslSize));
             file.write(entry.essl.data(), (long)esslSize);

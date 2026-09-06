@@ -814,7 +814,14 @@ extern "C"
     EGL_API EGLBoolean eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
         LOG_D("eglMakeCurrent, dpy: %p, draw: %p, read: %p, ctx: %p", dpy, draw, read, ctx);
         LOAD_EGL(eglMakeCurrent)
+#if MG_EGL_TRACE
+        // Only the trace line consumes this record, and the lookup it needs is
+        // behind a mutex. eglMakeCurrent runs at least once a frame in most
+        // applications, so in a default build -- where ETRACE expands to nothing
+        // and the argument below is never evaluated -- resolving it eagerly
+        // would pay that lock on every frame for output that cannot exist.
         MGContext* before = mg_context_find(ctx);
+#endif
         const EGLBoolean result = egl_eglMakeCurrent(dpy, draw, read, ctx);
         ETRACE("eglMakeCurrent(dpy=%p, draw=%p, read=%p, ctx=%p, MGContext=%llu) -> %s", dpy, draw, read, ctx,
                before ? before->id : 0ULL, result == EGL_TRUE ? "ok" : "FAILED");

@@ -37,6 +37,31 @@
 const char* atomicCounterEmulatedWatermark = "// Non-opaque atomic uniform converted to SSBO";
 bool checkIfAtomicCounterBufferEmulated(std::string_view glslCode);
 
+// Cheap "can this source possibly declare atomic counters?" test. The real
+// recogniser is scan_atomic_decls's regex, which is exact but spends a full
+// std::regex_search pass over the source; that is only worth paying when the
+// literal `atomic_uint` (any case) appears at all, and Minecraft's shaders
+// almost never contain the word. Gating on this makes the common path
+// allocation- and regex-free. It may only over-report (a byte comparison can
+// never miss a real match), which is what a gate is allowed to do.
+bool mg_source_mentions_atomic_uint(const std::string& source) {
+    static constexpr char kKey[] = "atomic_uint";
+    static constexpr size_t kKeyLen = sizeof(kKey) - 1; // 11
+    const size_t n = source.size();
+    if (n < kKeyLen) return false;
+    const char* s = source.data();
+    const size_t limit = n - kKeyLen;
+    for (size_t i = 0; i <= limit; ++i) {
+        size_t k = 0;
+        for (; k < kKeyLen; ++k) {
+            // | 0x20 folds A-Z onto a-z; '_' is untouched by it.
+            if ((static_cast<unsigned char>(s[i + k]) | 0x20) != static_cast<unsigned char>(kKey[k])) break;
+        }
+        if (k == kKeyLen) return true;
+    }
+    return false;
+}
+
 static TBuiltInResource InitResources() {
     TBuiltInResource Resources{};
 
@@ -838,6 +863,9 @@ struct AtomicCounterDecl {
 // there is no buffer to attach them to.
 std::vector<AtomicCounterDecl> scan_atomic_decls(const std::string& source) {
     std::vector<AtomicCounterDecl> decls;
+    // The overwhelming majority of sources never mention atomic_uint at all; the
+    // regex below would otherwise scan the whole shader for nothing.
+    if (!mg_source_mentions_atomic_uint(source)) return decls;
     static const std::regex decl_rx(
         R"(layout\s*\(\s*([^)]*?)\s*\)\s*uniform\s+atomic_uint\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;)",
         std::regex::icase);

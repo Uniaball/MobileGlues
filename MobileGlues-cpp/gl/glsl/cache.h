@@ -40,19 +40,25 @@ public:
     static Cache& get_instance();
 
 private:
+    // The source's lookup key: two independent 64-bit hashes of it packed into
+    // 128 bits. That is wide enough that a wrong answer needs a collision of the
+    // same order as the SHA-256 this used to key on, and cheap enough (one or
+    // two vectorised passes over a mid-kilobyte shader) that get() and put()
+    // no longer need to memoise the digest the way they did the old one.
+    using CacheKey = std::array<uint8_t, 16>;
     struct CacheEntry {
-        std::array<uint8_t, 32> sha256;
+        CacheKey key;
         std::string essl;
         size_t size;
     };
 
-    struct SHA256Hash {
-        size_t operator()(const std::array<uint8_t, 32>& key) const;
+    struct KeyHash {
+        size_t operator()(const CacheKey& key) const;
     };
 
     std::list<CacheEntry> cacheList;
     using ListIterator = std::list<CacheEntry>::iterator;
-    UnorderedMap<std::array<uint8_t, 32>, ListIterator, SHA256Hash> cacheMap;
+    UnorderedMap<CacheKey, ListIterator, KeyHash> cacheMap;
     size_t cacheSize = 0;
 
     // Entries inserted since the last save(), and when that save happened on
@@ -63,7 +69,15 @@ private:
     int pendingEntries = 0;
     int64_t lastSaveNs = 0;
 
-    static std::array<uint8_t, 32> computeSHA256(const uint8_t* data, size_t length);
+    // get() and put() are called back to back with the same source on every
+    // miss, so a missing get() parks its key and the bytes it was computed from
+    // here for put() to reuse. thread_local because the pair is always issued
+    // from one thread and this class takes no lock anywhere.
+    static thread_local std::string s_memo_source;
+    static thread_local CacheKey s_memo_key;
+    static thread_local bool s_memo_valid;
+
+    static CacheKey computeKey(const uint8_t* data, size_t length);
     void maintainCacheSize();
     void flushIfDue();
 };

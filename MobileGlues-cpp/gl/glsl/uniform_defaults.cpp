@@ -114,6 +114,28 @@ namespace {
         return toks;
     }
 
+    // process_uniform_declarations only ever deletes the `= <expression>` span of a
+    // global uniform declarator (and reports its value); no other statement rewrites
+    // the text -- struct definitions and constants are only cached for the evaluator.
+    // A byte scan for that exact shape, "uniform" followed by an '=' before the
+    // statement's ';', therefore knows in advance when the parse can change anything,
+    // and skipping it avoids the whole lex and the reassembly copy. The scan may
+    // over-report (a "uniform" that is part of another word, or an '=' in a comment)
+    // -- that merely runs the parser as before -- but it cannot under-report, because
+    // every span the parser deletes has this shape.
+    bool mg_uniform_initialisers_possible(const std::string& s) {
+        size_t i = 0;
+        // "uniform" is pure ASCII and string::find is a vectorised byte search.
+        while ((i = s.find("uniform", i)) != std::string::npos) {
+            const size_t semi = s.find(';', i);
+            const size_t eq = s.find('=', i);
+            if (eq != std::string::npos && (semi == std::string::npos || eq < semi)) return true;
+            if (semi == std::string::npos) break; // the statement runs to the end
+            i = semi + 1;
+        }
+        return false;
+    }
+
     // ----------------------------------------------------------------- types ----
 
     struct shape_t {
@@ -799,5 +821,9 @@ namespace {
 
 std::string process_uniform_declarations(const std::string& essl, std::vector<uniform_default_t>* defaults) {
     if (defaults) defaults->clear();
+    // A shader whose statements cannot carry a uniform initialiser is already
+    // final. Returning it as-is is byte-identical to what the parser would
+    // produce, and spares the lex and the copy.
+    if (!mg_uniform_initialisers_possible(essl)) return essl;
     return parser_t(essl, defaults).run();
 }
